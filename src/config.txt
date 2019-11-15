@@ -1,7 +1,7 @@
 camera_width 640
 camera_height 480
 
-show_img 0
+show_img 1
 
 
 captrue_data_save_img_floder /home/pi/Tengine/tests/data/img/

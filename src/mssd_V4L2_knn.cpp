@@ -39,6 +39,7 @@
 #include "v4l2/v4l2.h"  
 #include "knn/knn.h"
 #include <unistd.h> 
+#include "screen/screen.h"
 
 #define DEF_PROTO "models/MobileNetSSD_deploy.prototxt"
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
@@ -64,6 +65,8 @@ vector<Box>	boxes;
 vector<Box>	boxes_all; 
 
 V4L2 v4l2_;
+SCREEN screen_;
+unsigned int screen_pos_x,screen_pos_y;
 cv::Mat rgb;
 bool quit;
  pthread_mutex_t mutex_;
@@ -195,6 +198,9 @@ void draw_img(Mat &img)
 
 int main(int argc, char *argv[])
 {
+    screen_pos_x = 640;
+	screen_pos_y = 200;
+	screen_.init((char *)"/dev/fb0");
    quit = false;
     pthread_mutex_init(&mutex_, NULL);
     const std::string root_path = get_root_path();
@@ -323,9 +329,9 @@ int main(int argc, char *argv[])
         struct timeval t0, t1;
         float total_time = 0.f;
 
-        pthread_mutex_lock(&mutex_);
+        //pthread_mutex_lock(&mutex_);
          frame = rgb.clone();
-        pthread_mutex_unlock(&mutex_);
+        //pthread_mutex_unlock(&mutex_);
         knn_bgs.frame = frame.clone();
         show_img  = frame.clone();
         knn_bgs.pos ++;
@@ -420,8 +426,9 @@ int main(int argc, char *argv[])
         std::cout << "repeat " << repeat_count << " times, avg time per run is " << total_time / repeat_count << " ms\n";
         if(is_show_img)
         {
-            cv::imshow("MSSD", show_img);
-            cv::waitKey(10) ;
+            screen_.show_bgr_mat_at_screen(show_img,screen_pos_x,screen_pos_y);
+            //cv::imshow("MSSD", show_img);
+            //cv::waitKey(10) ;
         }
         if (quit)
              break;
@@ -443,9 +450,9 @@ void *v4l2_thread(void *threadarg)
 {
 	while (1)
 	{
-        pthread_mutex_lock(&mutex_);
+        //pthread_mutex_lock(&mutex_);
         v4l2_.read_frame(rgb);
-        pthread_mutex_unlock(&mutex_);
+        //pthread_mutex_unlock(&mutex_);
         sleep(0.01); 
         if (quit)
             break;

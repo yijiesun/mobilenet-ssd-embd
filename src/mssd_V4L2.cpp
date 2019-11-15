@@ -38,6 +38,7 @@
 #include "config.h"
 #include "v4l2/v4l2.h"  
 #include <unistd.h> 
+#include "screen/screen.h"
 
 #define DEF_PROTO "models/MobileNetSSD_deploy.prototxt"
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
@@ -54,6 +55,8 @@ struct Box
 };
 
 V4L2 v4l2_;
+SCREEN screen_;
+unsigned int screen_pos_x,screen_pos_y;
 cv::Mat rgb;
 bool quit;
  pthread_mutex_t mutex_;
@@ -145,6 +148,9 @@ void post_process_ssd(cv::Mat img, float threshold,float* outdata,int num)
 
 int main(int argc, char *argv[])
 {
+    screen_pos_x = 640;
+	screen_pos_y = 200;
+	screen_.init((char *)"/dev/fb0");
    quit = false;
     pthread_mutex_init(&mutex_, NULL);
     const std::string root_path = get_root_path();
@@ -268,9 +274,9 @@ int main(int argc, char *argv[])
         struct timeval t0, t1;
         float total_time = 0.f;
 
-        pthread_mutex_lock(&mutex_);
+        //pthread_mutex_lock(&mutex_);
          frame = rgb.clone();
-        pthread_mutex_unlock(&mutex_);
+        //pthread_mutex_unlock(&mutex_);
 
         for (int i = 0; i < repeat_count; i++)
         {
@@ -296,8 +302,9 @@ int main(int argc, char *argv[])
         post_process_ssd(frame, show_threshold, outdata, num);
         if(is_show_img)
         {
-            cv::imshow("MSSD", frame);
-            cv::waitKey(10) ;  
+            //cv::imshow("MSSD", frame);
+            screen_.show_bgr_mat_at_screen(frame,screen_pos_x,screen_pos_y);
+            //cv::waitKey(10) ;  
         }
         if (quit)
              break;
@@ -319,9 +326,9 @@ void *v4l2_thread(void *threadarg)
 {
 	while (1)
 	{
-        pthread_mutex_lock(&mutex_);
+        //pthread_mutex_lock(&mutex_);
         v4l2_.read_frame(rgb);
-        pthread_mutex_unlock(&mutex_);
+        //pthread_mutex_unlock(&mutex_);
         sleep(0.01); 
         if (quit)
             pthread_exit(NULL);

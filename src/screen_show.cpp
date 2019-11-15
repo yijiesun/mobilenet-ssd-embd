@@ -78,17 +78,19 @@ int main(int argc, char *argv[])
 
 	pthread_t threads_v4l2;
 	int rc = pthread_create(&threads_v4l2, NULL, v4l2_thread, NULL);
-
-   // while(1){
+#if 0
+    while(1){
  
         //pthread_mutex_lock(&mutex_);
-		//memcpy(argb_show,argb,640*480*4*sizeof(unsigned char ));
-        //pthread_mutex_unlock(&mutex_);
-		//screen_.show_bgr_mat_at_screen(frame,50,50);
+		bgr_frame = bgr.clone();
+       // pthread_mutex_unlock(&mutex_);
 
-       // if (quit)
-        //     break;
-   // }
+		screen_.show_bgr_mat_at_screen(bgr_frame,50,50);
+
+        if (quit)
+             break;
+    }
+#endif
     pthread_join(threads_v4l2,NULL);
 
 	v4l2_.stop_capturing();
@@ -103,10 +105,10 @@ void *v4l2_thread(void *threadarg)
 {
 	while (1)
 	{
-        pthread_mutex_lock(&mutex_);
-
+        //pthread_mutex_lock(&mutex_);
+		//v4l2_.read_frame(bgr);
         v4l2_.read_frame_argb(screen_.pfb,screen_.vinfo.xres_virtual,screen_pos_x,screen_pos_y);
-        pthread_mutex_unlock(&mutex_);
+        //pthread_mutex_unlock(&mutex_);
         sleep(0.01); 
         if (quit)
             pthread_exit(NULL);
