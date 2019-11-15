@@ -1,3 +1,5 @@
+#ifndef V4L2_H
+#define V4L2_H
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,8 +28,8 @@ class V4L2{
 public :
 	V4L2();
 	~V4L2();
-	int width;
-	int height;
+	unsigned int width;
+	unsigned int height;
 	char dev_name[100];
 	char bufSec[100];
 	int fd; 
@@ -36,6 +38,7 @@ public :
 	void init(const char *dev,int wid,int hgt);
 	void errno_exit(const char *s);
 	int xioctl(int fh, int request, void *arg);
+	int read_frame_argb(unsigned int *out,unsigned int screen_wid,unsigned int pos_x,unsigned int pos_y);
 	void  process_image(const void *p, int size,Mat &rgb);
 	int read_frame(Mat &out);
 	void stop_capturing(void);
@@ -46,4 +49,6 @@ public :
 	void open_device(void);
 	void close_device(void);
 	void yuyv_to_bgr(unsigned char* yuv,unsigned char* rgb,int width, int height );
+	void yuyv_to_rgb_screen(unsigned char* yuv,unsigned int* rgb,unsigned int width, unsigned int height,unsigned int res_wid,unsigned int pos_x,unsigned int pos_y );
 };
+#endif
