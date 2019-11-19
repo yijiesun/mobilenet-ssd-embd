@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include <sys/timeb.h>
-void getTimesSecf(char *param);
+double getTimesSecf(char *param = NULL);
 void getTimesSec(char *param);
 bool _str_cmp(char* a, char *b);
 void get_param_mssd_img(std::string &in,std::string &out);
@@ -23,4 +23,5 @@ void get_captrue_data_save_video_mode(int &mode);
 void get_captrue_data_save_img_mode(int &mode);
 void get_move_percent(double & move);
 void get_move_buff_cnt(int & cnt);
+void get_show_knn_box(bool &show);
 #endif

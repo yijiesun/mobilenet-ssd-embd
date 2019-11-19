@@ -1,6 +1,9 @@
 #include "v4l2.h"  
 using namespace std;
 using namespace cv;
+
+#define CLIP( a)  ((a) =  (a)<0?0:((a)>254?255:(a))   )  
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
  V4L2:: V4L2()
  {
@@ -12,7 +15,7 @@ using namespace cv;
 	close_device();
  }
 
- void  V4L2:: init(const char *dev,int wid,int hgt)
+ void  V4L2:: init(const char *dev,int wid,int hgt,int box_max_cnt)
  {
 	strncpy(dev_name,dev,200);
 	width = (unsigned int)wid;
@@ -35,16 +38,7 @@ int V4L2::xioctl(int fh, int request, void *arg)
 	return r;
 }
 
-void  V4L2::process_image(const void *p, int size,Mat &rgb)
-{
-	//int width = 640;
-	//int height = 480;
-	//Mat bgr;
-	//bgr.create(height,width,CV_8UC3);
-	yuyv_to_bgr((unsigned char*) p,rgb.data,width, height);
-}
-
-int V4L2::read_frame_argb(unsigned int *out,unsigned int screen_wid,unsigned int pos_x,unsigned int pos_y)
+int V4L2::read_frame_argb(unsigned int *out,Mat &rgb,unsigned int screen_wid,unsigned int pos_x,unsigned int pos_y)
 {
 	struct v4l2_buffer buf;
 	CLEAR(buf);
@@ -54,7 +48,7 @@ int V4L2::read_frame_argb(unsigned int *out,unsigned int screen_wid,unsigned int
 
 	if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
 		errno_exit("VIDIOC_DQBUF");
-	yuyv_to_rgb_screen((unsigned char*)buffers[buf.index].start,out,width, height ,screen_wid,pos_x,pos_y);
+	yuyv_to_rgb_screen((unsigned char*)buffers[buf.index].start,out,rgb.data,width, height ,screen_wid,pos_x,pos_y);
 
 	if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
 		errno_exit("VIDIOC_QBUF");
@@ -73,7 +67,7 @@ int V4L2::read_frame(Mat &out)
 	if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
 		errno_exit("VIDIOC_DQBUF");
 	
-	process_image(buffers[buf.index].start, buf.bytesused,out);
+	yuyv_to_bgr((unsigned char*) buffers[buf.index].start,out.data,width, height);
 
 	if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
 		errno_exit("VIDIOC_QBUF");
@@ -121,8 +115,6 @@ void V4L2::uninit_device(void)
 
 	free(buffers);
 }
-
-
 
 void V4L2::init_mmap(void)
 {
@@ -269,9 +261,8 @@ void V4L2::yuyv_to_bgr(unsigned char* yuv,unsigned char* rgb,int width, int heig
     	bt1 = 1.164 * (*y1 - 16) + 2.018 * (*u0 - 128); 
         gt1 = 1.164 * (*y1 - 16) - 0.813 * (*v0 - 128) - 0.394 * (*u0 - 128); 
         rt1 = 1.164 * (*y1 - 16) + 1.596 * (*v0 - 128); 
-    
       
-       	        if(rt0 > 250)  	rt0 = 255;
+       	if(rt0 > 250)  	rt0 = 255;
 		if(rt0< 0)    	rt0 = 0;	
  
 		if(gt0 > 250) 	gt0 = 255;
@@ -315,17 +306,50 @@ void V4L2::yuyv_to_bgr(unsigned char* yuv,unsigned char* rgb,int width, int heig
         r1 = rgb + 5;
     }   
 }
-
-void V4L2::yuyv_to_rgb_screen(unsigned char* yuv,unsigned int* rgb,unsigned int width, unsigned int height,unsigned int res_wid,unsigned int pos_x,unsigned int pos_y )
+void V4L2::mat_to_argb(unsigned char *bgr,unsigned int *argb,unsigned int width, unsigned int height,unsigned int res_wid,unsigned int pos_x,unsigned int pos_y)
 {
-	unsigned int *argb_row = rgb+pos_x+pos_y*res_wid;
-
+	unsigned int *argb_row = argb+pos_x+pos_y*res_wid;
+	unsigned int *argb0 = argb_row;
+	unsigned  char* b0 = bgr + 0;
+    unsigned  char* g0 = bgr + 1;
+    unsigned  char* r0 = bgr + 2;
+	unsigned int  irt0 = 0, igt0 = 0, ibt0 = 0;
+	for(unsigned int y = 0;y<height;y++)
+	{
+		for(unsigned int x = 0;x<width;x++)
+		{
+			irt0 = (unsigned int)*b0;
+			igt0 = (unsigned int)*g0;
+			ibt0 = (unsigned int)*r0;
+			*argb0  =  (0xff000000) | ((ibt0 << 16) & 0x00ff0000) | ((igt0 << 8) & 0x0000ff00) | ((irt0&0x000000ff));
+			bgr = bgr + 3;
+			argb_row = argb_row + 1;
+			if(bgr == NULL)
+				break;
+			b0 = bgr + 0;
+			g0 = bgr + 1;
+			r0 = bgr + 2;
+			argb0 = argb_row+0;
+		}
+		argb_row = argb+pos_x+pos_y*res_wid + y*res_wid;
+	}
+}
+void V4L2::yuyv_to_rgb_screen(unsigned char* yuv,unsigned int* argb,unsigned char* rgb,unsigned int width, unsigned int height,unsigned int res_wid,unsigned int pos_x,unsigned int pos_y )
+{
+	unsigned int *argb_row = argb+pos_x+pos_y*res_wid;
     unsigned char* y0 = yuv + 0;   
     unsigned char* u0 = yuv + 1;
     unsigned char* y1 = yuv + 2;
     unsigned char* v0 = yuv + 3;
 	unsigned int *argb0 = argb_row+0;
 	unsigned int *argb1 = argb_row +1;
+
+    unsigned  char* b0 = rgb + 0;
+    unsigned  char* g0 = rgb + 1;
+    unsigned  char* r0 = rgb + 2;
+    unsigned  char* b1 = rgb + 3;
+    unsigned  char* g1 = rgb + 4;
+    unsigned  char* r1 = rgb + 5;
 
     float rt0 = 0, gt0 = 0, bt0 = 0, rt1 = 0, gt1 = 0, bt1 = 0;
 	unsigned int  irt0 = 0, igt0 = 0, ibt0 = 0, irt1 = 0, igt1 = 0, ibt1 = 0;
@@ -341,16 +365,58 @@ void V4L2::yuyv_to_rgb_screen(unsigned char* yuv,unsigned int* rgb,unsigned int 
 			gt1 = 1.164 * (*y1 - 16) - 0.813 * (*v0 - 128) - 0.394 * (*u0 - 128); 
 			bt1 = 1.164 * (*y1 - 16) + 1.596 * (*v0 - 128); 
 
-			irt0 = (unsigned int)rt0<0?0:(rt0>255?255:rt0);
-			igt0 = (unsigned int)gt0<0?0:(gt0>255?255:gt0);
-			ibt0 = (unsigned int)bt0<0?0:(bt0>255?255:bt0);
-			irt1 = (unsigned int)rt1<0?0:(rt1>255?255:rt1);
-			igt1 = (unsigned int)gt1<0?0:(gt1>255?255:gt1);
-			ibt1 = (unsigned int)bt1<0?0:(bt1>255?255:bt1);
+
+			CLIP(rt0);
+			CLIP(gt0);
+			CLIP(bt0);
+			CLIP(rt1);
+			CLIP(gt1);
+			CLIP(bt1);
+		// 	       	        if(rt0 > 250)  	rt0 = 255;
+		// if(rt0< 0)    	rt0 = 0;	
+ 
+		// if(gt0 > 250) 	gt0 = 255;
+		// if(gt0 < 0)	gt0 = 0;	
+ 
+		// if(bt0 > 250)	bt0 = 255;
+		// if(bt0 < 0)	bt0 = 0;	
+ 
+		// if(rt1 > 250)	rt1 = 255;
+		// if(rt1 < 0)	rt1 = 0;	
+ 
+		// if(gt1 > 250)	gt1 = 255;
+		// if(gt1 < 0)	gt1 = 0;	
+ 
+		// if(bt1 > 250)	bt1 = 255;
+		// if(bt1 < 0)	bt1 = 0;	
+			irt0 = (unsigned int)rt0;
+			igt0 = (unsigned int)gt0;
+			ibt0 = (unsigned int)bt0;
+			irt1 = (unsigned int)rt1;
+			igt1 = (unsigned int)gt1;
+			ibt1 = (unsigned int)bt1;
+			// irt0 = (unsigned int)rt0<0?0:(rt0>=255?255:rt0);
+			// igt0 = (unsigned int)gt0<0?0:(gt0>255?255:gt0);
+			// ibt0 = (unsigned int)bt0<0?0:(bt0>255?255:bt0);
+			// irt1 = (unsigned int)rt1<0?0:(rt1>=255?255:rt1);
+			// igt1 = (unsigned int)gt1<0?0:(gt1>255?255:gt1);
+			// ibt1 = (unsigned int)bt1<0?0:(bt1>255?255:bt1);
+
 			*argb0  =  (0xff000000) | ((ibt0 << 16) & 0x00ff0000) | ((igt0 << 8) & 0x0000ff00) | ((irt0&0x000000ff));
+		
 			*argb1  =  (0xff000000) | ((ibt1 << 16) & 0x00ff0000) | ((igt1 << 8) & 0x0000ff00) | ((irt1&0x000000ff));
+			
+
+			*r0 = (unsigned char)ibt0;
+			*g0 = (unsigned char)igt0;
+			*b0 = (unsigned char)irt0;
+
+			*r1 = (unsigned char)ibt1;
+			*g1 = (unsigned char)igt1;
+			*b1 = (unsigned char)irt1;
 
 			yuv = yuv + 4;
+			rgb = rgb + 6;
 			argb_row = argb_row + 2;
 			if(yuv == NULL)
 			break;
@@ -359,11 +425,18 @@ void V4L2::yuyv_to_rgb_screen(unsigned char* yuv,unsigned int* rgb,unsigned int 
 			u0 = yuv + 1;
 			y1 = yuv + 2;
 			v0 = yuv + 3;
+			b0 = rgb + 0;
+			g0 = rgb + 1;
+			r0 = rgb + 2;
+			b1 = rgb + 3;
+			g1 = rgb + 4;
+			r1 = rgb + 5;
 			argb0 = argb_row+0;
 			argb1 = argb_row +1;
 		}
-		argb_row = rgb+pos_x+pos_y*res_wid + y*res_wid;
+		argb_row = argb+pos_x+pos_y*res_wid + y*res_wid;
 	}
+
 }
 
 #if 0

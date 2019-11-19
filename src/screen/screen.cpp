@@ -9,8 +9,11 @@
 using namespace std;
 using namespace cv;
 
+#define CLIP( a, b,c) ( (a)=(a)<(b)?(b):((a)>(c)?(c):(a))   ) 
+
 SCREEN::SCREEN()
 {
+        draw_box_max_cnt = 100;
         fb = -1;
         ret = -1;
         pfb = NULL;
@@ -20,8 +23,17 @@ SCREEN::~SCREEN()
 
 }
 
-int SCREEN::init(char *dev)
+void SCREEN::uninit()
 {
+	unsigned int i;
+	munmap(pfb, finfo.smem_len);
+	free(pfb);
+}
+
+int SCREEN::init(char *dev,int wid,int hgt)
+{
+        img_width = wid;
+        img_hgt = hgt;
         strncpy(dev_name,dev,200);
         fb = open(dev_name, O_RDWR);
         if (fb < 0)
@@ -45,18 +57,19 @@ int SCREEN::init(char *dev)
             perror("ioctl");
             return -1;
         }
-
+        pfb = (unsigned int *)malloc(finfo.smem_len);
         pfb = (unsigned int *)mmap(NULL, finfo.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fb, 0);
-        //unsigned int fbLineSize = finfo.line_length;
+
         printf("smem_len: %ld", finfo.smem_len);
         if (NULL == pfb)
         {
             perror("mmap");
             return -1;
         }
+       
         printf("pfb :0x%x \n", *pfb);
         std::cout << "height: " << vinfo.yres << "weight: "<< vinfo.xres << std::endl;
-
+        std::cout << "xres_virtual: " << vinfo.xres_virtual << "yres_virtual: "<< vinfo.yres_virtual << std::endl;
 }
 
 void SCREEN::show_bgr_mat_at_screen(Mat &in,int pos_x,int pos_y)
@@ -69,4 +82,35 @@ void SCREEN::show_bgr_mat_at_screen(Mat &in,int pos_x,int pos_y)
    
         }
     }
+}
+
+void SCREEN::draw_line(unsigned int *buf, int x0,int y0,int x1,int y1)
+{
+    uint32_t color = 0xffff0000;
+        for (int h=y0; h <= y1; h++){
+            for(int w=x0;w <=x1; w++){
+                *(buf+h*vinfo.xres_virtual+w)  = color;
+            }
+    }
+}
+
+void SCREEN::refresh_draw_box(unsigned int *buf,unsigned int pos_x,unsigned int pos_y)
+{
+	for (vector<draw_box>::iterator it = v_draw.begin(); it != v_draw.end();)
+	{
+        int  lux = it->lu.x + pos_x;
+        int luy = it->lu.y+pos_y;
+        int  rdx = it->rd.x + pos_x;
+        int rdy = it->rd.y+pos_y;
+
+        CLIP(lux,pos_x+2,pos_x+img_width-2);
+        CLIP(luy,pos_y+2,pos_y+img_hgt-2);
+        CLIP(rdx,pos_x+2,pos_x+img_width-2);
+        CLIP(rdy,pos_y+2,pos_y+img_hgt-2);
+        draw_line(buf,lux,luy,rdx,luy); //lu-ru
+        draw_line(buf,rdx,luy,rdx,rdy);//ru-rd
+        draw_line(buf,lux,rdy,rdx,rdy);//ld-rd
+        draw_line(buf,lux,luy,lux,rdy);//lu-ld
+        it++;
+	}
 }

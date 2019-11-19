@@ -152,6 +152,28 @@ void get_camera_size(int &wid,int &hgt)
     }
 
 }
+void get_show_knn_box(bool &show)
+{
+	FILE *read_setup;
+    string config_file = "../src/config.txt";
+	if ((read_setup = fopen(config_file.c_str(), "r")) == NULL) {
+		puts("Fail to open config.txt!");
+		exit(0);
+	}
+	char str[200];
+	int num;
+	while (fgets(str, 100, read_setup) != NULL) {
+       if (_str_cmp(str, (char *)"show_knn_box"))
+		{
+			const char * split = " ";
+			char *p = strtok(str, split);
+			p = strtok(NULL, split);
+			sscanf(p, "%d", &num);
+		}
+    }
+	show = (bool)num;
+}
+
 void get_show_img(bool &show)
 {
 	FILE *read_setup;
@@ -276,7 +298,7 @@ void get_captrue_data_save_img_mode(int &mode)
 		
     }
 }
-void getTimesSecf(char *param)
+double getTimesSecf(char *param)
 {
 	time_t lastTime;
 	time(&lastTime);
@@ -297,6 +319,7 @@ void getTimesSecf(char *param)
 		t->tm_min,
 		t->tm_sec,
 		stTimeb.millitm);
+		return t->tm_sec+stTimeb.millitm*1000;
 }
 void getTimesSec(char *param)
 {

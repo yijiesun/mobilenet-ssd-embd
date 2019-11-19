@@ -54,6 +54,21 @@ struct Box
     int class_idx;
     float score;
 };
+
+vector<Box>	boxes; 
+vector<Box>	boxes_all; 
+V4L2 v4l2_;
+unsigned int * pfb;
+SCREEN screen_;
+unsigned int screen_pos_x,screen_pos_y;
+cv::Mat rgb;
+cv::Mat final_img;
+cv::Mat show_img;
+bool quit;
+bool is_show_img;
+bool is_show_knn_box;
+pthread_mutex_t mutex_;
+
 const char* class_names[] = {"background",
                         "aeroplane", "bicycle", "bird", "boat",
                         "bottle", "bus", "car", "cat", "chair",
@@ -61,15 +76,6 @@ const char* class_names[] = {"background",
                         "motorbike", "person", "pottedplant",
                         "sheep", "sofa", "train", "tvmonitor"};
 
-vector<Box>	boxes; 
-vector<Box>	boxes_all; 
-
-V4L2 v4l2_;
-SCREEN screen_;
-unsigned int screen_pos_x,screen_pos_y;
-cv::Mat rgb;
-bool quit;
- pthread_mutex_t mutex_;
 void *v4l2_thread(void *threadarg);
 void my_handler(int s);
 // void get_input_data_ssd(std::string& image_file, float* input_data, int img_h,  int img_w)
@@ -116,6 +122,8 @@ void post_process_ssd(cv::Mat img, float threshold,float* outdata,int num)
     {
         if(outdata[1]>=threshold)
         {
+           if(outdata[0] !=15)
+                break;
             Box box;
             box.class_idx=outdata[0];
             box.score=outdata[1];
@@ -200,7 +208,7 @@ int main(int argc, char *argv[])
 {
     screen_pos_x = 640;
 	screen_pos_y = 200;
-	screen_.init((char *)"/dev/fb0");
+	screen_.init((char *)"/dev/fb0",640,480);
    quit = false;
     pthread_mutex_init(&mutex_, NULL);
     const std::string root_path = get_root_path();
@@ -266,16 +274,20 @@ int main(int argc, char *argv[])
     std::string dev_num;
     get_param_mms_V4L2(dev_num);
     std::cout<<"open "<<dev_num<<std::endl;
-    bool is_show_img;
     get_show_img(is_show_img);
     std::cout<<"is_show_img "<<is_show_img<<std::endl;
+    get_show_knn_box(is_show_knn_box);
+    std::cout<<"is_show_knn_box "<<is_show_knn_box<<std::endl;
+
     init_knn(knn_bgs,knn_conf);
     v4l2_.init(dev_num.c_str(),640,480);
     v4l2_.open_device();
 	v4l2_.init_device();
 	v4l2_.start_capturing();
 
-    
+    pfb = (unsigned int *)malloc(screen_.finfo.smem_len);
+    final_img.create(480,640,CV_8UC3);
+    show_img.create(480,640,CV_8UC3);
     rgb.create(480,640,CV_8UC3);
 	pthread_t threads_v4l2;
 	int rc = pthread_create(&threads_v4l2, NULL, v4l2_thread, NULL);
@@ -302,7 +314,7 @@ int main(int argc, char *argv[])
     int img_size = img_h * img_w * 3;
     float *input_data = (float *)malloc(sizeof(float) * img_size);
     cv::Mat frame;
-    cv::Mat show_img;
+   
     int node_idx=0;
     int tensor_idx=0;
     int x0,y0,w0,h0;
@@ -334,6 +346,7 @@ int main(int argc, char *argv[])
         //pthread_mutex_unlock(&mutex_);
         knn_bgs.frame = frame.clone();
         show_img  = frame.clone();
+   
         knn_bgs.pos ++;
         knn_bgs.boundRect.clear();
         knn_bgs.knn_core();
@@ -420,16 +433,34 @@ int main(int argc, char *argv[])
         int num=out_dim[1];
         
         post_process_ssd(frame, show_threshold, outdata, num);
-        togetherAllBox(1,0,0);
-        draw_img(show_img);
         std::cout << "--------------------------------------\n";
         std::cout << "repeat " << repeat_count << " times, avg time per run is " << total_time / repeat_count << " ms\n";
-        if(is_show_img)
+        togetherAllBox(1,0,0);
+        if(is_show_knn_box)
         {
-            screen_.show_bgr_mat_at_screen(show_img,screen_pos_x,screen_pos_y);
-            //cv::imshow("MSSD", show_img);
-            //cv::waitKey(10) ;
+            draw_img(show_img);
+            //pthread_mutex_lock(&mutex_);
+            final_img = show_img.clone();
+            //pthread_mutex_unlock(&mutex_);
         }
+        else
+        {
+             pthread_mutex_lock(&mutex_);
+             screen_.v_draw.clear();
+             for (int i = 0; i<boxes_all.size(); i++) {
+                 draw_box box_tmp{Point(boxes_all[i].x0,boxes_all[i].y0),Point(boxes_all[i].x1,boxes_all[i].y1),0};
+               screen_.v_draw.push_back(box_tmp);
+                }
+             pthread_mutex_unlock(&mutex_);
+            //opencv useage
+            //if(is_show_img)
+        // {
+                //screen_.show_bgr_mat_at_screen(show_img,screen_pos_x,screen_pos_y);
+                //cv::imshow("MSSD", show_img);
+                //cv::waitKey(10) ;
+            //}
+        }
+
         if (quit)
              break;
     }
@@ -437,6 +468,7 @@ int main(int argc, char *argv[])
     v4l2_.stop_capturing();
     v4l2_.uninit_device();
     v4l2_.close_device();
+    screen_.uninit();
     postrun_graph(graph);
     free(input_data);
     destroy_runtime_graph(graph);
@@ -450,9 +482,27 @@ void *v4l2_thread(void *threadarg)
 {
 	while (1)
 	{
-        //pthread_mutex_lock(&mutex_);
-        v4l2_.read_frame(rgb);
-        //pthread_mutex_unlock(&mutex_);
+        if(is_show_img)
+        {
+            if(is_show_knn_box)
+            {
+                v4l2_.read_frame(rgb);
+                //pthread_mutex_lock(&mutex_);
+                v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,screen_pos_x,screen_pos_y);
+                //pthread_mutex_unlock(&mutex_);
+                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+            }
+            else
+            {
+                v4l2_.read_frame_argb(pfb,rgb,screen_.vinfo.xres_virtual,screen_pos_x,screen_pos_y);
+                pthread_mutex_lock(&mutex_);
+                screen_.refresh_draw_box(pfb,screen_pos_x,screen_pos_y);
+                pthread_mutex_unlock(&mutex_);
+                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+            }
+        }
+        else
+            v4l2_.read_frame(rgb);
         sleep(0.01); 
         if (quit)
             break;

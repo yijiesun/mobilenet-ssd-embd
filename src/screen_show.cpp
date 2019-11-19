@@ -34,6 +34,9 @@
 V4L2 v4l2_;
 SCREEN screen_;
 unsigned int screen_pos_x,screen_pos_y;
+unsigned int * pfb;
+cv::Mat rgb;
+draw_box box_tmp{Point(150,150),Point(400,400),0};
 bool quit;
  pthread_mutex_t mutex_;
 void *v4l2_thread(void *threadarg);
@@ -42,10 +45,11 @@ void my_handler(int s);
 
 int main(int argc, char *argv[])
 {
+    
 	screen_pos_x = 100;
 	screen_pos_y = 100;
-	screen_.init((char *)"/dev/fb0");
-    //VideoWriter outputVideo;
+	screen_.init((char *)"/dev/fb0",640,480);
+ 
    quit = false;
     pthread_mutex_init(&mutex_, NULL);
 
@@ -57,6 +61,7 @@ int main(int argc, char *argv[])
  
    sigaction(SIGINT, &sigIntHandler, NULL);
 
+    rgb.create(480,640,CV_8UC3);
     Mat frame;
     std::string dev_num,imgfld,video_fld;
     get_param_mms_V4L2(dev_num);
@@ -75,6 +80,7 @@ int main(int argc, char *argv[])
     v4l2_.open_device();
 	v4l2_.init_device();
 	v4l2_.start_capturing();
+    pfb = (unsigned int *)malloc(screen_.finfo.smem_len);
 
 	pthread_t threads_v4l2;
 	int rc = pthread_create(&threads_v4l2, NULL, v4l2_thread, NULL);
@@ -92,7 +98,7 @@ int main(int argc, char *argv[])
     }
 #endif
     pthread_join(threads_v4l2,NULL);
-
+    screen_.uninit();
 	v4l2_.stop_capturing();
 	v4l2_.uninit_device();
 	v4l2_.close_device();
@@ -103,12 +109,15 @@ int main(int argc, char *argv[])
 
 void *v4l2_thread(void *threadarg)
 {
+    
+    screen_.v_draw.push_back(box_tmp);
 	while (1)
 	{
-        //pthread_mutex_lock(&mutex_);
-		//v4l2_.read_frame(bgr);
-        v4l2_.read_frame_argb(screen_.pfb,screen_.vinfo.xres_virtual,screen_pos_x,screen_pos_y);
-        //pthread_mutex_unlock(&mutex_);
+            v4l2_.read_frame_argb(pfb,rgb,screen_.vinfo.xres_virtual,screen_pos_x,screen_pos_y);
+            screen_.refresh_draw_box(pfb,screen_pos_x,screen_pos_y);
+            memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+       // screen_.draw_line(200,200,600,200);
+
         sleep(0.01); 
         if (quit)
             pthread_exit(NULL);

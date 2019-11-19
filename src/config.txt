@@ -2,7 +2,7 @@ camera_width 640
 camera_height 480
 
 show_img 1
-
+show_knn_box 0
 
 captrue_data_save_img_floder /home/pi/Tengine/tests/data/img/
 captrue_data_save_video_floder /home/pi/Tengine/tests/data/video/
