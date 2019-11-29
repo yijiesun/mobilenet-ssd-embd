@@ -8,6 +8,16 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include <sys/timeb.h>
+struct Box
+{
+    float x0;
+    float y0;
+    float x1;
+    float y1;
+    int class_idx;
+    float score;
+};
+
 double getTimesSecf(char *param = NULL);
 void getTimesSec(char *param);
 bool _str_cmp(char* a, char *b);

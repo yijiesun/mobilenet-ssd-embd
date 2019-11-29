@@ -46,8 +46,8 @@ void my_handler(int s);
 int main(int argc, char *argv[])
 {
     
-	screen_pos_x = 100;
-	screen_pos_y = 100;
+	screen_pos_x = 0;
+	screen_pos_y = 0;
 	screen_.init((char *)"/dev/fb0",640,480);
  
    quit = false;

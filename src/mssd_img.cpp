@@ -38,15 +38,6 @@
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
 #define DEF_IMAGE "tests/images/ssd_dog.jpg"
 
-struct Box
-{
-    float x0;
-    float y0;
-    float x1;
-    float y1;
-    int class_idx;
-    float score;
-};
 
 void get_input_data_ssd(std::string& image_file, float* input_data, int img_h, int img_w)
 {

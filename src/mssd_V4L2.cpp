@@ -45,16 +45,6 @@
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
 #define DEF_IMAGE "tests/images/ssd_dog.jpg"
 
-struct Box
-{
-    float x0;
-    float y0;
-    float x1;
-    float y1;
-    int class_idx;
-    float score;
-};
-
 std::vector<Box> boxes;
 vector<Box>	boxes_all; 
 V4L2 v4l2_;
@@ -171,8 +161,8 @@ void post_process_ssd(cv::Mat img, float threshold,float* outdata,int num)
 
 int main(int argc, char *argv[])
 {
-    screen_pos_x = 640;
-	screen_pos_y = 100;
+    screen_pos_x = 0;
+	screen_pos_y = 0;
 	screen_.init((char *)"/dev/fb0",640,480);
    quit = false;
     pthread_mutex_init(&mutex_, NULL);

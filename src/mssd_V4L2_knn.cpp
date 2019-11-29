@@ -45,16 +45,6 @@
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
 #define DEF_IMAGE "tests/images/ssd_dog.jpg"
 
-struct Box
-{
-    float x0;
-    float y0;
-    float x1;
-    float y1;
-    int class_idx;
-    float score;
-};
-
 vector<Box>	boxes; 
 vector<Box>	boxes_all; 
 V4L2 v4l2_;
@@ -206,8 +196,8 @@ void draw_img(Mat &img)
 
 int main(int argc, char *argv[])
 {
-    screen_pos_x = 640;
-	screen_pos_y = 200;
+    screen_pos_x = 0;
+	screen_pos_y = 0;
 	screen_.init((char *)"/dev/fb0",640,480);
    quit = false;
     pthread_mutex_init(&mutex_, NULL);
@@ -287,6 +277,7 @@ int main(int argc, char *argv[])
 
     pfb = (unsigned int *)malloc(screen_.finfo.smem_len);
     final_img.create(480,640,CV_8UC3);
+    final_img = Mat::zeros(480,640,CV_8UC3);
     show_img.create(480,640,CV_8UC3);
     rgb.create(480,640,CV_8UC3);
 	pthread_t threads_v4l2;
@@ -439,9 +430,9 @@ int main(int argc, char *argv[])
         if(is_show_knn_box)
         {
             draw_img(show_img);
-            //pthread_mutex_lock(&mutex_);
+            pthread_mutex_lock(&mutex_);
             final_img = show_img.clone();
-            //pthread_mutex_unlock(&mutex_);
+            pthread_mutex_unlock(&mutex_);
         }
         else
         {
@@ -487,9 +478,9 @@ void *v4l2_thread(void *threadarg)
             if(is_show_knn_box)
             {
                 v4l2_.read_frame(rgb);
-                //pthread_mutex_lock(&mutex_);
+                pthread_mutex_lock(&mutex_);
                 v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,screen_pos_x,screen_pos_y);
-                //pthread_mutex_unlock(&mutex_);
+                pthread_mutex_unlock(&mutex_);
                 memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
             }
             else
