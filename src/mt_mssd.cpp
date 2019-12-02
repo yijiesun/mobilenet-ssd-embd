@@ -283,25 +283,12 @@ void *v4l2_thread(void *threadarg)
     set_cpu(3);
 	while (1)
 	{
-        if(is_show_img)
-        {
-            if(is_show_knn_box)
-            {
-                //v4l2_.read_frame(frame);
-                pthread_mutex_lock(&mutex_show_img);
-                v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,0,0);
-                pthread_mutex_unlock(&mutex_show_img);
-                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
-            }
-            else
-            {
-                v4l2_.read_frame_argb(pfb,frame,screen_.vinfo.xres_virtual,0,0);
-                screen_.refresh_draw_box(pfb,0,0);
-                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
-            }
-        }
-        else
-            v4l2_.read_frame(frame);
+
+        pthread_mutex_lock(&mutex_show_img);
+        v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,0,0);
+        pthread_mutex_unlock(&mutex_show_img);
+        memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+
         sleep(0.01); 
         if (quit)
             break;
@@ -355,10 +342,6 @@ int main(int argc, char* argv[])
     model_file = root_path + DEF_MODEL;
     screen_.init((char *)"/dev/fb0",640,480);
     pfb = (unsigned int *)malloc(screen_.finfo.smem_len);
-    v4l2_.init(dev_num.c_str(),640,480);
-    v4l2_.open_device();
-	v4l2_.init_device();
-	v4l2_.start_capturing();
 
     knn_bgs.IMG_WID = IMG_WID;
     knn_bgs.IMG_HGT = IMG_HGT;
@@ -481,10 +464,6 @@ int main(int argc, char* argv[])
         boxes_all.clear();
         for(int i=0;i<5;i++)
             boxes[i].clear();
-
-        // for(int i=0;i<CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2;i++)
-        //     frame_[i] = frame.clone();
-      
  
         struct timeval t0_, t1_;
         float total_time = 0.f;
@@ -503,9 +482,8 @@ int main(int argc, char* argv[])
         for(int i=0;i<CPU_THREAD_CNT;i++)
            pthread_join(threads_c[i],NULL);
  #if GPU_THREAD_CNT>=1
-
        pthread_join(threads_gpu,NULL);
-       pthread_mutex_lock(&mutex_show_img);
+#endif
         draw_img(show_img);
         Mat out,hot_map_color,hot_map_color2,hot_map_thresh_color,hot_map;
         hot_map = knn_bgs.hot_map;
@@ -516,37 +494,15 @@ int main(int argc, char* argv[])
         hconcat(hot_map_color2,hot_map_thresh_color,hot_map_color2);
         vconcat(out,hot_map_color2,out);
         resize(out, show_img, show_img.size(), 0, 0,  cv::INTER_LINEAR); 
-        //cv::resize(hot_map_color2, show_img, cv::Size(480,640), (0, 0), (0, 0), cv::INTER_LINEAR);
-         pthread_mutex_unlock(&mutex_show_img);
-       
-#endif
-        if(is_show_knn_box)
-        {
-            pthread_mutex_lock(&mutex_show_img);
-            final_img = show_img.clone();
-            pthread_mutex_unlock(&mutex_show_img);
-        }
-        else
-        {
-             screen_.v_draw.clear();
-             for (int i = 0; i<boxes_all.size(); i++) {
-                 draw_box box_tmp{Point(boxes_all[i].x0,boxes_all[i].y0),Point(boxes_all[i].x1,boxes_all[i].y1),0};
-               screen_.v_draw.push_back(box_tmp);
-                }
-            //opencv useage
-            //if(is_show_img)
-        // {
-                //screen_.show_bgr_mat_at_screen(show_img,screen_pos_x,screen_pos_y);
-                //cv::imshow("MSSD", show_img);
-                //cv::waitKey(10) ;
-            //}
-        }
+
+        pthread_mutex_lock(&mutex_show_img);
+        final_img = show_img.clone();
+        pthread_mutex_unlock(&mutex_show_img);
+
         gettimeofday(&t1_, NULL);
         float mytime = ( float )((t1_.tv_sec * 1000000 + t1_.tv_usec) - (t0_.tv_sec * 1000000 + t0_.tv_usec)) / 1000;
         std::cout <<"thread_done"  << " times  " << mytime << "ms\n";
         std::cout <<" --------------------------------------------------------------------------\n";
-        //cv::imshow("MSSD", frame);
-        //cv::waitKey(10) ;
 
     }
     for(int i=0;i<CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2;i++)

@@ -304,6 +304,7 @@ void KNN_BGS::processRects(vector<Box> &box)
 	clearSmallRecs();
 	paddingRecs(boundRect, padSize);
 	mergeRecs(boundRect, knn_over_percent);
+	clearSmallRecs();
 	boundRectTmp.shrink_to_fit();
 	contours.shrink_to_fit();
 	hierarcy.shrink_to_fit();
@@ -314,7 +315,7 @@ void KNN_BGS::clearSmallRecs()
 	vector<Rect>::iterator it;
 	for(it=boundRect.begin();it!=boundRect.end();)
 	{
-		if((it->width<tooSmalltoDrop || it->height<tooSmalltoDrop*2) ||(it->width>IMG_WID/2 || it->height>IMG_HGT/2) )
+		if((it->width<tooSmalltoDrop || it->height<tooSmalltoDrop*2) ||(it->width>IMG_WID/3 || it->height>IMG_HGT/3) )
 			it=boundRect.erase(it);
 		else
 			it++;
