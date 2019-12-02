@@ -173,7 +173,27 @@ void get_show_knn_box(bool &show)
     }
 	show = (bool)num;
 }
-
+void get_roi_limit(bool &roi)
+{
+	FILE *read_setup;
+    string config_file = "../src/config.txt";
+	if ((read_setup = fopen(config_file.c_str(), "r")) == NULL) {
+		puts("Fail to open config.txt!");
+		exit(0);
+	}
+	char str[200];
+	int num;
+	while (fgets(str, 100, read_setup) != NULL) {
+       if (_str_cmp(str, (char *)"roi_limit"))
+		{
+			const char * split = " ";
+			char *p = strtok(str, split);
+			p = strtok(NULL, split);
+			sscanf(p, "%d", &num);
+		}
+    }
+	roi = (bool)num;
+}
 void get_show_img(bool &show)
 {
 	FILE *read_setup;
@@ -258,6 +278,46 @@ void get_move_percent(double & move)
 		
     }
 }
+void get_knn_thresh(double & th)
+{
+	FILE *read_setup;
+    string config_file = "../src/config.txt";
+	if ((read_setup = fopen(config_file.c_str(), "r")) == NULL) {
+		puts("Fail to open config.txt!");
+		exit(0);
+	}
+	char str[200];
+	while (fgets(str, 100, read_setup) != NULL) {
+       if (_str_cmp(str, (char *)"knn_thresh"))
+		{
+			const char * split = " ";
+			char *p = strtok(str, split);
+			p = strtok(NULL, split);
+			sscanf(p, "%lf", &th);
+		}
+		
+    }
+}
+void get_knn_box_exist_cnt(int & cnt)
+{
+		FILE *read_setup;
+    string config_file = "../src/config.txt";
+	if ((read_setup = fopen(config_file.c_str(), "r")) == NULL) {
+		puts("Fail to open config.txt!");
+		exit(0);
+	}
+	char str[200];
+	while (fgets(str, 100, read_setup) != NULL) {
+       if (_str_cmp(str, (char *)"knn_box_exist_cnt"))
+		{
+			const char * split = " ";
+			char *p = strtok(str, split);
+			p = strtok(NULL, split);
+			sscanf(p, "%d", &cnt);
+		}
+		
+    }
+}
 void get_move_buff_cnt(int & cnt)
 {
 		FILE *read_setup;
@@ -298,7 +358,7 @@ void get_captrue_data_save_img_mode(int &mode)
 		
     }
 }
-double getTimesSecf(char *param)
+void getTimesSecf(char *param)
 {
 	time_t lastTime;
 	time(&lastTime);
@@ -319,7 +379,6 @@ double getTimesSecf(char *param)
 		t->tm_min,
 		t->tm_sec,
 		stTimeb.millitm);
-		return t->tm_sec+stTimeb.millitm*1000;
 }
 void getTimesSec(char *param)
 {

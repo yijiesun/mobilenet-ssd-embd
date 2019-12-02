@@ -341,8 +341,6 @@ int main(int argc, char *argv[])
         knn_bgs.pos ++;
         knn_bgs.boundRect.clear();
         knn_bgs.knn_core();
-        knn_bgs.postTreatment();
-        knn_bgs.processRects();
         boxes_all.clear();
         for (int i = 0; i< knn_bgs.boundRect.size(); i++)
 		{

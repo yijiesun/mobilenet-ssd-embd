@@ -2,7 +2,7 @@ camera_width 640
 camera_height 480
 
 show_img 1
-show_knn_box 0
+show_knn_box 1
 
 captrue_data_save_img_floder /home/pi/Tengine/tests/data/img/
 captrue_data_save_video_floder /home/pi/Tengine/tests/data/video/
@@ -17,11 +17,11 @@ captrue_data_save_video_mode 0
 mssd_img_in /home/pi/Tengine/tests/images/ssd_dog.png
 mssd_img_out /home/pi/Tengine/tests/result/result_ssd_dog.jpg
 
-mssd_cvCaptrue_dev 10
-mssd_v4l2_dev /dev/video10
+mssd_cvCaptrue_dev 8
+mssd_v4l2_dev /dev/video8
 
 mssd_video_in /home/pi/Tengine/tests/video/test1.avi
 mssd_video_out /home/pi/Tengine/tests/result/result_noknn_test1.avi
 
-mssd_video_knn_in /home/pi/Tengine/tests/video/test1.avi
-mssd_video_knn_out /home/pi/Tengine/tests/result/result_knn_test1.avi
+mssd_video_knn_in /home/firefly/cap_data/vid/2019-11-19-16-47-40-774.avi
+mssd_video_knn_out /home/firefly/cap_data/out/2019-11-19-16-47-40-774.avi
