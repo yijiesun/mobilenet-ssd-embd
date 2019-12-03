@@ -5,7 +5,6 @@ using namespace cv;
 using namespace std;
 
 #define CLIP(a,b,c) (  (a) = (a)>(c)?(c):((a)<(b)?(b):(a))  )
-
 KNN_BGS::KNN_BGS()
 {
 	framePixelHistory = NULL;
@@ -124,14 +123,24 @@ bool sortFun(const cv::Rect &p1, const cv::Rect &p2)
 {
 	return p1.width * p1.height > p2.width * p2.height;
 }
-
-void KNN_BGS::getTopRects(vector<Rect> &rects0, vector<Rect> &rects)
+bool sortFunY(const REC_BOX &p1, const REC_BOX &p2)
+{
+	return p1.rec.height > p2.rec.height;
+}
+void KNN_BGS::getTopRects(vector<Rect> &rects0, vector<REC_BOX> &rects)
 {
 	for (int i = 0; i<rects0.size(); i++)
 	{
 		if (i >= useTopRect)
 			break;
-		rects.push_back(rects0[i]);
+		REC_BOX tmp;
+		tmp.rec = rects0[i];
+		tmp.have_box = 0;
+		CLIP(tmp.rec.x, 0, (IMG_WID - 1));
+		CLIP(tmp.rec.y, 0, (IMG_HGT - 1));
+		CLIP(tmp.rec.width, 1, (IMG_WID - 1 - tmp.rec.x));
+		CLIP(tmp.rec.height, 1, (IMG_HGT - 1 - tmp.rec.y));
+		rects.push_back(tmp);
 	}
 }
 
@@ -141,17 +150,18 @@ void KNN_BGS::addBoxToRecs()
 	for(it=knn_use_box.begin();it!=knn_use_box.end();)
 	{
 		it->show_cnt++;
-		Rect rect_tmp;
-		rect_tmp.x =it->x0;
-		rect_tmp.y = it->y0;
-		rect_tmp.width = it->x1 - it->x0;
-		rect_tmp.height = it->y1 - it->y0;
-		CLIP(rect_tmp.x,0,IMG_WID-1);
-		CLIP(rect_tmp.y,0,IMG_HGT-1);
-		CLIP(rect_tmp.width,1,IMG_WID-1-rect_tmp.x);
-		CLIP(rect_tmp.height,1,IMG_HGT-1-rect_tmp.y);
+		REC_BOX rect_tmp;
+		rect_tmp.rec.x =it->x0;
+		rect_tmp.rec.y = it->y0;
+		rect_tmp.rec.width = it->x1 - it->x0;
+		rect_tmp.rec.height = it->y1 - it->y0;
+		rect_tmp.have_box = 0;
+		CLIP(rect_tmp.rec.x,0,IMG_WID-1);
+		CLIP(rect_tmp.rec.y,0,IMG_HGT-1);
+		CLIP(rect_tmp.rec.width,1,IMG_WID-1-rect_tmp.rec.x);
+		CLIP(rect_tmp.rec.height,1,IMG_HGT-1-rect_tmp.rec.y);
 		
-		if((it->show_cnt>=knn_box_exist_cnt)||(rect_tmp.width>IMG_WID/2 || rect_tmp.height >IMG_HGT/2))
+		if((it->show_cnt>=knn_box_exist_cnt)||(rect_tmp.rec.width>IMG_WID/2 || rect_tmp.rec.height >IMG_HGT/2))
 			it=knn_use_box.erase(it);
 		else
 		{
@@ -233,69 +243,69 @@ void KNN_BGS::processRects(vector<Box> &box)
 	//mergeRecs(boundRect, knn_over_percent);
 
 #if 1
-		vector<Rect>::iterator it;
+		vector<REC_BOX>::iterator it;
 	for(it=boundRect.begin();it!=boundRect.end();it++)
 	{
 		//up
 		while(1)
 		{
 			int x0,y0,w0,h0;
-			x0 = it->x;
-			y0 = it->y-1;
-			w0 = it->width;
-			h0 = it->height;
+			x0 = it->rec.x;
+			y0 = it->rec.y-1;
+			w0 = it->rec.width;
+			h0 = it->rec.height;
 			if(y0<=0) break;
 			Mat tmp=DiffMask(Rect(x0,y0,w0,1))/255;
 			int zero_cnt = countNonZero(tmp);
 			//cout<<"uzero_cnt "<<zero_cnt<<" w0/3 "<<w0/3<<endl;
 			if(zero_cnt==0) break;
-			it->y -=1;
+			it->rec.y -=1;
 
 		}
 		//down
 		while(1)
 		{
 			int x0,y0,w0,h0;
-			x0 = it->x;
-			y0 = it->y;
-			w0 = it->width;
-			h0 = it->height+1;
+			x0 = it->rec.x;
+			y0 = it->rec.y;
+			w0 = it->rec.width;
+			h0 = it->rec.height+1;
 			if(y0+h0>=IMG_HGT-2) break;
 			Mat tmp=DiffMask(Rect(x0,y0+h0,w0,1))/255;
 			int zero_cnt = countNonZero(tmp);
 			//cout<<"dzero_cnt "<<zero_cnt<<" w0/3 "<<w0/3<<endl;
 			if(zero_cnt==0) break;
-			it->height +=1;
+			it->rec.height +=1;
 		}
 		//left
 		while(1)
 		{
 			int x0,y0,w0,h0;
-			x0 = it->x-1;
-			y0 = it->y;
-			w0 = it->width;
-			h0 = it->height;
+			x0 = it->rec.x-1;
+			y0 = it->rec.y;
+			w0 = it->rec.width;
+			h0 = it->rec.height;
 			if(x0<=0) break;
 			Mat tmp=DiffMask(Rect(x0,y0,1,h0))/255;
 			int zero_cnt = countNonZero(tmp);
 			//cout<<"lzero_cnt "<<zero_cnt<<" w0/3 "<<w0/3<<endl;
 			if(zero_cnt==0) break;
-			it->x -=1;
+			it->rec.x -=1;
 		}
 		//right
 		while(1)
 		{
 			int x0,y0,w0,h0;
-			x0 = it->x;
-			y0 = it->y;
-			w0 = it->width+1;
-			h0 = it->height;
+			x0 = it->rec.x;
+			y0 = it->rec.y;
+			w0 = it->rec.width+1;
+			h0 = it->rec.height;
 			if(x0+w0>=IMG_WID-2) break;
 			Mat tmp=DiffMask(Rect(x0+w0,y0,1,h0))/255;
 			int zero_cnt = countNonZero(tmp);
 			//cout<<"rzero_cnt "<<zero_cnt<<" w0/3 "<<w0/3<<endl;
 			if(zero_cnt==0) break;
-			it->width +=1;
+			it->rec.width +=1;
 		}
 		
 	}
@@ -304,18 +314,29 @@ void KNN_BGS::processRects(vector<Box> &box)
 	clearSmallRecs();
 	paddingRecs(boundRect, padSize);
 	mergeRecs(boundRect, knn_over_percent);
-	clearSmallRecs();
+	clearStrangeRecs();
 	boundRectTmp.shrink_to_fit();
 	contours.shrink_to_fit();
 	hierarcy.shrink_to_fit();
 
 }
-void KNN_BGS::clearSmallRecs()
+void KNN_BGS::clearStrangeRecs()
 {
-	vector<Rect>::iterator it;
+	vector<REC_BOX>::iterator it;
 	for(it=boundRect.begin();it!=boundRect.end();)
 	{
-		if((it->width<tooSmalltoDrop || it->height<tooSmalltoDrop*2) ||(it->width>IMG_WID/3 || it->height>IMG_HGT/3) )
+		if(2*it->rec.width > 3*it->rec.height)
+			it=boundRect.erase(it);
+		else
+			it++;
+	}
+}
+void KNN_BGS::clearSmallRecs()
+{
+	vector<REC_BOX>::iterator it;
+	for(it=boundRect.begin();it!=boundRect.end();)
+	{
+		if((it->rec.width<tooSmalltoDrop || it->rec.height<tooSmalltoDrop*2) ||(it->rec.width>IMG_WID/2 || it->rec.height>IMG_HGT/2) )
 			it=boundRect.erase(it);
 		else
 			it++;
@@ -333,8 +354,117 @@ int KNN_BGS::buildRecsFromContors(vector<vector<Point>> &contours, vector<Rect> 
 	}
 	return cnt;
 }
+void KNN_BGS::knn_puzzle(Mat &frame)
+{
+	pos_x_in_rec_box.clear();
+	int pos_rec = 0;
+	int p_x=0,p_y=0;
+	int total_wid=0,total_hgt=0;
+	Mat out_tmp = Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+	std::sort(boundRect.begin(), boundRect.end(), sortFunY);
+	if(boundRect.size()>0)
+	{
+		Mat roi = frame(boundRect[0].rec);
+		Mat tmp = out_tmp(cv::Rect(p_x, p_y, boundRect[0].rec.width, boundRect[0].rec.height));
+		roi.copyTo(tmp);
+		p_x = boundRect[0].rec.width;
+		p_y=0;
+		total_wid = boundRect[0].rec.width;
+		total_hgt = boundRect[0].rec.height;
+		pos_rec++;
+		pos_x_in_rec_box.push_back(0);
+	}
+	//顶对其的第二块
+	if(boundRect.size()>1)
+	{
+		Mat roi = frame(boundRect[1].rec);
+		Mat tmp = out_tmp(cv::Rect(p_x, p_y, boundRect[1].rec.width, boundRect[1].rec.height));
+		roi.copyTo(tmp);
+		total_wid += boundRect[1].rec.width;
+		pos_rec++;
+		pos_x_in_rec_box.push_back(p_x);
+	}
+	while(pos_rec<=3&&boundRect.size()>pos_rec)
+	{
+		// if(boundRect.size()>pos_rec)
+		// {
+		// 	cout<<"boundRect.size() "<<boundRect.size()<<" >pos_rec "<<pos_rec<<endl;
+		// 	int pos = find_son_block(boundRect,pos_rec,boundRect[pos_rec-1].width,boundRect[0].height-boundRect[pos_rec-1].height);
+		// 	if(pos!=0)
+		// 	{
+		// 		p_y = boundRect[pos_rec-1].height;
+		// 		Mat roi = frame(boundRect[pos]);
+		// 		Mat tmp = out_tmp(cv::Rect(p_x, p_y, boundRect[pos].width, boundRect[pos].height));
+		// 		roi.copyTo(tmp);
+		// 		pos_rec++;
+		// 	}
+		// }
+		// else
+		// 	break;
+		//顶对其
+		if(boundRect.size()>pos_rec)
+		{
+			p_y = 0;
+			p_x+=boundRect[pos_rec-1].rec.width;
+			Mat roi = frame(boundRect[pos_rec].rec);
+			Mat tmp = out_tmp(cv::Rect(p_x, p_y, boundRect[pos_rec].rec.width, boundRect[pos_rec].rec.height));
+			roi.copyTo(tmp);
+			total_wid += boundRect[pos_rec].rec.width;
+			pos_rec++;
+			pos_x_in_rec_box.push_back(p_x);
+		}
+		else
+			break;
+		
+		
+	}
+	if(total_wid==0&&total_hgt==0)
+	{
+		puzzle_mat=Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+	}
+	else
+	{
+		Mat tmp = out_tmp(cv::Rect(0,0,total_wid,total_hgt));
+		puzzle_mat.create(tmp.size(),CV_8UC3);
+		tmp.copyTo(puzzle_mat);
+	}
 
-void KNN_BGS::mergeRecs(vector<Rect> &rects, float percent)
+}
+int KNN_BGS::find_son_block(vector<Rect> &rects,int begin,int max_wid,int max_hgt)
+{
+	int pos = begin;
+	bool is_found = false;
+	vector<Rect> rest;
+	vector<Rect>::iterator it;
+	Rect found;
+	int aaa=0;
+	for(it=rects.begin()+begin;it!=rects.end();it++)
+	{
+		if(!is_found&&(it->width<=max_wid)&&(it->height<=max_hgt))
+		{
+			found = *it;
+			is_found = true;
+			continue;
+		}
+		else
+		{
+			rest.push_back(*it);
+			pos++;
+		}
+	}
+	if(is_found&&pos+1<rects.size())
+	{
+		Rect tmp = rects[pos];
+		rects[pos] = found;
+		int res_t = 0;
+		for(it=rects.begin()+pos+1;res_t<rest.size()&&it!=rects.end();it++)
+		{
+			*it = rest[res_t++];
+		}
+	}
+	return is_found?pos:0;
+}
+void KNN_BGS::mergeRecs(vector<REC_BOX> &rects, float percent)
 {
 	int len = rects.size();
 	int new_len = 0;
@@ -352,9 +482,9 @@ void KNN_BGS::mergeRecs(vector<Rect> &rects, float percent)
 				break;
 			if (i == ptr)
 				continue;
-			if (DecideOverlap(rects[ptr], rects[i], tmp) >= percent)
+			if (DecideOverlap(rects[ptr].rec, rects[i].rec, tmp) >= percent)
 			{
-				rects[ptr] = tmp;
+				rects[ptr].rec = tmp;
 				if (rects.begin() + i <= rects.end())
 				{
 					rects.erase(rects.begin() + i);
@@ -428,14 +558,14 @@ float KNN_BGS::DecideOverlap(const Rect &r1, const Rect &r2, Rect &r3)
 	return ratio;
 }
 
-void KNN_BGS::paddingRecs(vector<Rect> &rects, int size)
+void KNN_BGS::paddingRecs(vector<REC_BOX> &rects, int size)
 {
 	for (int i = 0; i<rects.size(); i++)
 	{
-		rects[i].x = min(max(rects[i].x - size, 0), IMG_WID-1);
-		rects[i].y = min(max(rects[i].y - size, 0), IMG_HGT-1);
-		rects[i].width = rects[i].x + rects[i].width + 2 * size > IMG_WID ? IMG_WID - rects[i].x : rects[i].width + 2 * size;
-		rects[i].height = rects[i].y + rects[i].height + 2 * size > IMG_HGT ? IMG_HGT - rects[i].y : rects[i].height + 2 * size;
+		rects[i].rec.x = min(max(rects[i].rec.x - size, 0), IMG_WID-1);
+		rects[i].rec.y = min(max(rects[i].rec.y - size, 0), IMG_HGT-1);
+		rects[i].rec.width = rects[i].rec.x + rects[i].rec.width + 2 * size > IMG_WID ? IMG_WID - rects[i].rec.x : rects[i].rec.width + 2 * size;
+		rects[i].rec.height = rects[i].rec.y + rects[i].rec.height + 2 * size > IMG_HGT ? IMG_HGT - rects[i].rec.y : rects[i].rec.height + 2 * size;
 	}
 }
 
@@ -483,10 +613,10 @@ void KNN_BGS::saveROI()
 	int x0 = 0, y0 = 0, w0 = 0, h0 = 0;
 	for (int i = 0; i< boundRect.size(); i++)
 	{
-		x0 = boundRect[i].x; 
-		y0 = boundRect[i].y; 
-		w0 = boundRect[i].width; 
-		h0 = boundRect[i].height;
+		x0 = boundRect[i].rec.x; 
+		y0 = boundRect[i].rec.y; 
+		w0 = boundRect[i].rec.width; 
+		h0 = boundRect[i].rec.height;
 
 		if (w0 <= tooSmalltoDrop || h0 <= tooSmalltoDrop)
 			continue;

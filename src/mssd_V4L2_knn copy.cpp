@@ -23,21 +23,24 @@
  */
 
 #include <unistd.h>
+#include <sys/time.h>
 #include <iostream>
 #include <iomanip>
 #include <string>
 #include <vector>
+#include <memory>
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include "tengine_c_api.h"
-#include <sys/time.h>
-#include <stdio.h>
 #include "cpu_device.h"
 #include "common.hpp"
 #include "config.h"
-#include "knn/knn.h"
 #include "v4l2/v4l2.h"  
 #include "screen/screen.h"
+#include "knn/knn.h"
 
 #define DEF_PROTO "models/MobileNetSSD_deploy.prototxt"
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
@@ -47,42 +50,41 @@
 using namespace cv;
 using namespace std;
 
-int frame_cnt;
-int cpu_num_[2] ={0,1};
 int knn_conf[5] = { 2, 1, 5, 5, 10};
-V4L2 v4l2_;
+int cpu_num_[5] ={0,1,2,3,4};
 KNN_BGS knn_bgs;
 Mat process_frame;
 Mat background;
-cv::Mat final_img;
 Mat show_img;
-unsigned int * pfb;
-SCREEN screen_;
 pthread_mutex_t  mutex_knn_bgs_frame;
 pthread_mutex_t  mutex_show_img;
 pthread_mutex_t  mutex_box;
-vector<Box>	boxes[2]; 
+V4L2 v4l2_;
+vector<Box>	boxes[5]; 
 vector<Box>	boxes_all; 
+cv::Mat rgb;
+SCREEN screen_;
+unsigned int * pfb;
 cv::Mat frame;
+cv::Mat final_img;
 int IMG_WID;
 int IMG_HGT;
 int img_h;
 int img_w;
 int img_size;
+int thread_num = 0;
 bool quit;
 bool is_show_img;
 bool is_show_knn_box;
-tensor_t input_tensor[2];
-float* input_data[2];
-tensor_t out_tensor[2];
-graph_t graph[2]; 
+tensor_t input_tensor[CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2];
+float* input_data[CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2];
+tensor_t out_tensor[CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2];
+graph_t graph[CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2]; //GPU-0;CPU-123
 
 const char* class_names[] = {"background", "aeroplane", "bicycle",   "bird",   "boat",        "bottle",
                                 "bus",        "car",       "cat",       "chair",  "cow",         "diningtable",
                                 "dog",        "horse",     "motorbike", "person", "pottedplant", "sheep",
                                 "sofa",       "train",     "tvmonitor"};
-
-void *v4l2_thread(void *threadarg);
 inline int set_cpu(int i)  
 {  
     cpu_set_t mask;  
@@ -119,80 +121,20 @@ void draw_img(Mat &img)
 
 }
 
-int box_in_which_rec(Box &b0)
+void togetherAllBox(double zoom_value,int x0,int y0,vector<Box> &b0,vector<Box> &b_all )
 {
-    int pos = 0;
-    float percent = 0;
-    vector<REC_BOX>::iterator it;
-
-    Rect tmp;
-    for(int i=0;i<knn_bgs.boundRect.size();i++)
-    {
-        Rect rbox(b0.x0-knn_bgs.pos_x_in_rec_box[i]+knn_bgs.boundRect[i].rec.x,b0.y0+knn_bgs.boundRect[i].rec.y,b0.x1-b0.x0,b0.y1-b0.y0);
-        // cout<<"["<<frame_cnt<<"] "<<"boundRect["<<i<<"]:"<<knn_bgs.boundRect[i].rec.x<<","<<knn_bgs.boundRect[i].rec.y<<","<<knn_bgs.boundRect[i].rec.height<<","<<knn_bgs.boundRect[i].rec.width<<endl;
-        float p=knn_bgs.DecideOverlap(rbox,knn_bgs.boundRect[i].rec,tmp);
-        if(p>percent)
-        {
-            pos = i;
-            // cout<<"["<<frame_cnt<<"] "<<"p>percent "<<p<<","<<percent<<"  pos:"<<pos<<endl;
-            percent = p;
-        }
-        if(percent>0.5)
-        {
-            b0.x0 -= knn_bgs.pos_x_in_rec_box[pos];
-            return pos;
-        }
-        else  
-            return -1;
-    }
-}
-void togetherAllBox(int th_num,vector<Box> &b0,vector<Box> &b_all )
-{
-    if(th_num==0)
-    {
-        for (int i = 0; i<b0.size(); i++) {
-            float bx0 = b0[i].x0, by0 = b0[i].y0, bx1= b0[i].x1, by1 = b0[i].y1;
-
-            int pos = box_in_which_rec(b0[i]);
-            // cout<<"["<<frame_cnt<<"] "<<"["<<th_num<<"] x0y0x1y1,pos:"<<bx0<<","<<by0<<","<<bx1<<","<<by1<<"          "<<pos<<endl;
-            
-            if(pos>=0)
-            {
-                knn_bgs.boundRect[pos].have_box = 1;
-                // cout<<"["<<frame_cnt<<"] "<<"["<<pos<<"] wyhw:"<<knn_bgs.boundRect[pos].rec.x<<","<<knn_bgs.boundRect[pos].rec.y<<","<<knn_bgs.boundRect[pos].rec.height<<","<<knn_bgs.boundRect[pos].rec.width<<endl;
-                b0[i].x0= bx0 + knn_bgs.boundRect[pos].rec.x;
-                b0[i].y0 = by0 + knn_bgs.boundRect[pos].rec.y;
-                b0[i].x1 = bx1 + knn_bgs.boundRect[pos].rec.x;
-                b0[i].y1 = by1 + knn_bgs.boundRect[pos].rec.y;
-                CLIP(b0[i].x0,0,IMG_WID-1);
-                CLIP(b0[i].y0,0,IMG_HGT-1);
-                CLIP(b0[i].x1,0,IMG_WID-1);
-                CLIP(b0[i].y1,0,IMG_HGT-1);
-                b_all.push_back(b0[i]);
-            }
-	    }
-        for(int i=0;i<knn_bgs.boundRect.size();i++)
-        {
-
-            if(knn_bgs.boundRect[i].have_box)
-            {
-                Mat	tmp_hotmap = knn_bgs.hot_map(knn_bgs.boundRect[i].rec);
-                tmp_hotmap.convertTo(tmp_hotmap, tmp_hotmap.type(), 1, 10);
-            }
-            else
-            {
-                Mat	tmp_hotmap = knn_bgs.hot_map(knn_bgs.boundRect[i].rec);
-                tmp_hotmap.convertTo(tmp_hotmap, tmp_hotmap.type(), 1, -10);
-            }
-        }
-    }
-    else
-    {
-        for (int i = 0; i<b0.size(); i++) {
-            b_all.push_back(b0[i]);
-        }
-    }
-
+	for (int i = 0; i<b0.size(); i++) {
+		float bx0 = b0[i].x0, by0 = b0[i].y0, bx1= b0[i].x1, by1 = b0[i].y1;
+			b0[i].x0= bx0 / zoom_value + x0;
+			b0[i].y0 = by0 / zoom_value + y0;
+			b0[i].x1 = bx1 / zoom_value + x0;
+			b0[i].y1 = by1/ zoom_value + y0;
+            CLIP(b0[i].x0,0,IMG_WID-1);
+            CLIP(b0[i].y0,0,IMG_HGT-1);
+            CLIP(b0[i].x1,0,IMG_WID-1);
+            CLIP(b0[i].y1,0,IMG_HGT-1);
+		   b_all.push_back(b0[i]);
+	}
 }
 void get_input_data_ssd(Mat& img, float* input_data, int img_h, int img_w)
 {
@@ -232,10 +174,6 @@ void post_process_ssd(vector<Box> & box_,int thread_num,int raw_h,int raw_w,floa
                 box.y0=outdata[3]*raw_h;
                 box.x1=outdata[4]*raw_w;
                 box.y1=outdata[5]*raw_h;
-                CLIP(box.x0,0,IMG_WID-1);
-                CLIP(box.y0,0,IMG_HGT-1);
-                CLIP(box.x1,0,IMG_WID-1);
-                CLIP(box.y1,0,IMG_HGT-1);
                 box_.push_back(box);
                 printf("[%d]  %s\t:%.0f%%\n",thread_num, class_names[box.class_idx], box.score * 100);
                 printf("[%d]  BOX:( %g , %g ),( %g , %g )\n",thread_num,box.x0,box.y0,box.x1,box.y1);
@@ -247,33 +185,52 @@ void post_process_ssd(vector<Box> & box_,int thread_num,int raw_h,int raw_w,floa
 
 void mssd_core(graph_t &graph, int thread_num, float* input_data,tensor_t &input_tensor, tensor_t &out_tensor )
 {
-    // cout<<"["<<frame_cnt<<"] "<<"thread_num "<<thread_num<<endl;
+    if(thread_num!=0&& thread_num > knn_bgs.boundRect.size())
+        return ;
+    cout<<"thread_num "<<thread_num<<" size "<<knn_bgs.boundRect.size()<<endl;
     struct timeval t0, t1;
     float total_time = 0.f;
     gettimeofday(&t0, NULL);
 
     Mat	img_roi;
+    int x0=0, y0=0, w0=0, h0=0,x0_=0, y0_=0, w0_=0, h0_=0;
     if(thread_num == 0)
-    {
-        // return;
-        for(int i=0;i<knn_bgs.boundRect.size();i++)
-        {
-            pthread_mutex_lock(&mutex_show_img);
-            Mat	img_show = show_img(knn_bgs.boundRect[i].rec);
-            img_show.convertTo(img_show, img_show.type(), 1, 30);
-            pthread_mutex_unlock(&mutex_show_img);
-        }
-        pthread_mutex_lock(&mutex_knn_bgs_frame);
-        img_roi = knn_bgs.puzzle_mat.clone();
-        pthread_mutex_unlock(&mutex_knn_bgs_frame);
-    }
-    else
     {
         pthread_mutex_lock(&mutex_knn_bgs_frame);
         img_roi = knn_bgs.frame.clone();
-        pthread_mutex_unlock(&mutex_knn_bgs_frame);
+         pthread_mutex_unlock(&mutex_knn_bgs_frame);
     }
+    else
+    {
+        x0 = knn_bgs.boundRect[thread_num-1].rec.x;
+        y0 = knn_bgs.boundRect[thread_num-1].rec.y;
+        w0 = knn_bgs.boundRect[thread_num-1].rec.width;
+        h0 = knn_bgs.boundRect[thread_num-1].rec.height;
+        x0_ = x0 - 2 * knn_bgs.padSize;
+        y0_ = y0 - 2 * knn_bgs.padSize;
+        w0_ = w0 + 4 * knn_bgs.padSize;
+        h0_ = h0 + 4 * knn_bgs.padSize;
+        
+        CLIP(x0_, 0, (knn_bgs.IMG_WID - 1));
+        CLIP(y0_, 0, (knn_bgs.IMG_HGT - 1));
+        CLIP(w0_, 1, (knn_bgs.IMG_WID - 1 - x0_));
+        CLIP(h0_, 1, (knn_bgs.IMG_HGT - 1 - y0_));
+        CLIP(x0, 0, (knn_bgs.IMG_WID - 1));
+        CLIP(y0, 0, (knn_bgs.IMG_HGT - 1));
+        CLIP(w0, 1, (knn_bgs.IMG_WID - 1 - x0));
+        CLIP(h0, 1, (knn_bgs.IMG_HGT - 1 - y0));
 
+        pthread_mutex_lock(&mutex_knn_bgs_frame);
+        Mat tmp = knn_bgs.frame(cv::Rect(x0, y0, w0, h0));
+        pthread_mutex_unlock(&mutex_knn_bgs_frame);
+        img_roi = tmp.clone();
+
+        pthread_mutex_lock(&mutex_show_img);
+        Mat	img_show = show_img(cv::Rect(x0, y0, w0, h0));
+        img_show.convertTo(img_show, img_show.type(), 1, 30);
+        pthread_mutex_unlock(&mutex_show_img);
+        
+    }
     int raw_h = img_roi.size().height;
     int raw_w = img_roi.size().width;
     get_input_data_ssd(img_roi, input_data, img_h, img_w);
@@ -289,27 +246,78 @@ void mssd_core(graph_t &graph, int thread_num, float* input_data,tensor_t &input
 
     post_process_ssd(boxes[thread_num],thread_num,raw_h,raw_w,show_threshold, outdata, num);
     
+    if (boxes[thread_num].empty())
+    {
+        Mat	tmp_hotmap = knn_bgs.hot_map(cv::Rect(x0, y0, w0, h0));
+        tmp_hotmap.convertTo(tmp_hotmap, tmp_hotmap.type(), 1, -10);
+    }
+    else
+    {
+        Mat	tmp_hotmap = knn_bgs.hot_map(cv::Rect(x0_, y0_, w0_, h0_));
+        tmp_hotmap.convertTo(tmp_hotmap, tmp_hotmap.type(), 1, 10);
+    }
     pthread_mutex_lock(&mutex_box);
-    togetherAllBox(thread_num, boxes[thread_num], boxes_all);
+    togetherAllBox(1, x0, y0, boxes[thread_num], boxes_all);
     pthread_mutex_unlock(&mutex_box);
     gettimeofday(&t1, NULL);
     float mytime = ( float )((t1.tv_sec * 1000000 + t1.tv_usec) - (t0.tv_sec * 1000000 + t0.tv_usec)) / 1000;
 
-    std::cout<<"["<<frame_cnt<<"] " <<"thread " << thread_num << " times  " << mytime << "ms\n";
+    std::cout <<"thread " << thread_num << " times  " << mytime << "ms\n";
 }
 
 void *cpu_pthread(void *threadarg)
 {
-    mssd_core(graph[1], 1,input_data[1],input_tensor[1],out_tensor[1]);
+    int cpu_num = (*(int*)threadarg )+(GPU_THREAD_CNT+1)/2;
+    mssd_core(graph[cpu_num], cpu_num,input_data[cpu_num],input_tensor[cpu_num],out_tensor[cpu_num]);
 }
 void *gpu_pthread(void *threadarg)
 {
     mssd_core(graph[0], 0,input_data[0],input_tensor[0],out_tensor[0]);
+#if (GPU_THREAD_CNT>=2)
+    mssd_core(graph[0], 4,input_data[0],input_tensor[0],out_tensor[0]);
+#endif
 }
+
+void *v4l2_thread(void *threadarg)
+{
+    set_cpu(3);
+	while (1)
+	{
+        if(is_show_img)
+        {
+            if(is_show_knn_box)
+            {
+                pthread_mutex_lock(&mutex_knn_bgs_frame);
+                v4l2_.read_frame(frame);
+                pthread_mutex_unlock(&mutex_knn_bgs_frame);
+                pthread_mutex_lock(&mutex_show_img);
+                v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,0,0);
+                pthread_mutex_unlock(&mutex_show_img);
+                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+            }
+            else
+            {
+                pthread_mutex_lock(&mutex_knn_bgs_frame);
+                v4l2_.read_frame_argb(pfb,frame,screen_.vinfo.xres_virtual,0,0);
+                pthread_mutex_unlock(&mutex_knn_bgs_frame);
+                pthread_mutex_lock(&mutex_box);
+                screen_.refresh_draw_box(pfb,0,0);
+                pthread_mutex_unlock(&mutex_box);
+                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+            }
+        }
+        else
+            v4l2_.read_frame(frame);
+        sleep(0.01); 
+        if (quit)
+            break;
+        
+    }
+}
+
 
 int main(int argc, char* argv[])
 {
-    frame_cnt = 0;
     quit = false;
     bool first =true;
     int first_cnt =0;
@@ -332,13 +340,10 @@ int main(int argc, char* argv[])
     std::cout<<"is_show_knn_box "<<is_show_knn_box<<std::endl;
 
     cv::VideoCapture capture;
-    VideoWriter outputVideo;
     capture.open(in_video_file.c_str());
     capture.set(CV_CAP_PROP_FOURCC, cv::VideoWriter::fourcc ('M', 'J', 'P', 'G'));
     IMG_WID = capture.get(CV_CAP_PROP_FRAME_WIDTH);
     IMG_HGT = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
-    Size sWH = Size( 2*IMG_WID,2*IMG_HGT);
-    outputVideo.open(out_video_file.c_str(), cv::VideoWriter::fourcc ('M', 'P', '4', '2'), 25, sWH);
     frame.create(IMG_HGT,IMG_WID,CV_8UC3);
     process_frame.create(IMG_HGT,IMG_WID,CV_8UC3);
     show_img.create(IMG_HGT,IMG_WID,CV_8UC3);
@@ -397,11 +402,18 @@ int main(int argc, char* argv[])
     int dims[] = {1, 3, img_h, img_w};
     // thread 0 for cpu 2A72
     const struct cpu_info* p_info = get_predefined_cpu("rk3399");
-    int a72_list[] = {4,5};
+    int a72_list[] = {4};
     set_online_cpu(( struct cpu_info* )p_info, a72_list, sizeof(a72_list) / sizeof(int));
     create_cpu_device("a72", p_info);
+    int a72_list01[] = {5};
+    set_online_cpu(( struct cpu_info* )p_info, a72_list01, sizeof(a72_list01) / sizeof(int));
+    create_cpu_device("a7201", p_info);
+    // thread 3 for cpu 4A53
+    int a53_list[] = {0,1,2};
+    set_online_cpu(( struct cpu_info* )p_info, a53_list, sizeof(a53_list) / sizeof(int));
+    create_cpu_device("a53", p_info);
 
-  for(int i=0;i<2;i++)
+    for(int i=0;i<CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2;i++)
     {
         graph[i] = create_graph(NULL, "caffe", pproto_file, pmodel_file);
         input_data[i] = ( float* )malloc(sizeof(float) * img_size);
@@ -410,22 +422,32 @@ int main(int argc, char* argv[])
             printf("Get input node failed : node_idx: %d, tensor_idx: %d\n", node_idx, tensor_idx);   
         set_tensor_shape(input_tensor[i], dims, 4);
     }
-
+#if GPU_THREAD_CNT>=1
     set_graph_device(graph[0], "acl_opencl");
-
-    if(set_graph_device(graph[1], "a72") < 0)
+#endif
+#if (CPU_THREAD_CNT>=1)
+    if(set_graph_device(graph[(GPU_THREAD_CNT+1)/2], "a72") < 0)
         std::cerr << "set device a72 failed\n";
+#endif
+#if (CPU_THREAD_CNT>=2)
+    if(set_graph_device(graph[(GPU_THREAD_CNT+1)/2+1], "a7201") < 0)
+         std::cerr << "set device a7201 failed\n";
+#endif
+#if (CPU_THREAD_CNT>=3)
+    if(set_graph_device(graph[(GPU_THREAD_CNT+1)/2+2], "a53") < 0)
+        std::cerr << "set device a53 failed\n";
+#endif
 
 	pthread_t threads_v4l2;
 	int rc = pthread_create(&threads_v4l2, NULL, v4l2_thread, NULL);
     pthread_detach(threads_v4l2);
-
-    for(int i=0;i<2;i++)
+    for(int i=0;i<CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2;i++)
     {
         int ret_prerun = prerun_graph(graph[i]);
         if(ret_prerun < 0)
             std::printf("prerun failed\n"); 
     }
+
 
     while(1){
 
@@ -434,7 +456,7 @@ int main(int argc, char* argv[])
 		// 	cout<<"cannot open video or end of video"<<endl;
         //     break;
 		// }
-        frame_cnt++;
+
         if(first)
         {
             first_cnt++;
@@ -447,7 +469,7 @@ int main(int argc, char* argv[])
             else
                 continue;      
         }
-
+        
         process_frame = frame.clone();
         pthread_mutex_lock(&mutex_show_img);
         show_img = frame.clone();
@@ -463,43 +485,45 @@ int main(int argc, char* argv[])
         knn_bgs.processRects(boxes_all);
         pthread_mutex_unlock(&mutex_box);
         boxes_all.clear();
-        knn_bgs.knn_puzzle(process_frame);
-        for(int i=0;i<2;i++)
+        for(int i=0;i<5;i++)
             boxes[i].clear();
-        
+ 
         struct timeval t0_, t1_;
         float total_time = 0.f;
+  
+        pthread_t threads_c[CPU_THREAD_CNT];      
         gettimeofday(&t0_, NULL);
-        pthread_t threads_c;      
+
+ #if GPU_THREAD_CNT>=1
         pthread_t threads_gpu;
         pthread_create(&threads_gpu, NULL, gpu_pthread, NULL);
-        pthread_create(&threads_c, NULL, cpu_pthread,NULL);
+#endif
 
-        pthread_join(threads_c,NULL);
-        pthread_join(threads_gpu,NULL);
+       for(int i=0;i<CPU_THREAD_CNT;i++)
+            pthread_create(&threads_c[i], NULL, cpu_pthread, (void*)& cpu_num_[i]);
 
+        for(int i=0;i<CPU_THREAD_CNT;i++)
+           pthread_join(threads_c[i],NULL);
+ #if GPU_THREAD_CNT>=1
+       pthread_join(threads_gpu,NULL);
+#endif
+    if(is_show_knn_box)
+    {
        pthread_mutex_lock(&mutex_show_img);
         draw_img(show_img);
-        
         Mat out,hot_map_color,hot_map_color2,hot_map_thresh_color,hot_map;
         hot_map = knn_bgs.hot_map;
 
         cv::cvtColor(knn_bgs.FGMask, hot_map_color2, CV_GRAY2BGR);  
         cv::cvtColor(knn_bgs.hot_map, hot_map_thresh_color, CV_GRAY2BGR);  
-        //hconcat(show_img,knn_bgs.bk,out);
-        resize(knn_bgs.puzzle_mat, knn_bgs.puzzle_mat, show_img.size(), 0, 0,  cv::INTER_LINEAR); 
-        hconcat(show_img,knn_bgs.puzzle_mat,out);
+        hconcat(show_img,knn_bgs.bk,out);
         hconcat(hot_map_color2,hot_map_thresh_color,hot_map_color2);
         vconcat(out,hot_map_color2,out);
-   
-        string no=to_string(frame_cnt);
-        Point siteNo;
-        siteNo.x = 25;
-        siteNo.y = 25;
-        putText( out, no, siteNo, 2,1,Scalar( 255, 0, 0 ), 4);
         resize(out, show_img, show_img.size(), 0, 0,  cv::INTER_LINEAR); 
          pthread_mutex_unlock(&mutex_show_img);
-        
+    }
+
+
         if(is_show_knn_box)
         {
             pthread_mutex_lock(&mutex_show_img);
@@ -515,21 +539,23 @@ int main(int argc, char* argv[])
                screen_.v_draw.push_back(box_tmp);
                 }
             pthread_mutex_unlock(&mutex_box);
+            //opencv useage
+            //if(is_show_img)
+        // {
+                //screen_.show_bgr_mat_at_screen(show_img,screen_pos_x,screen_pos_y);
+                //cv::imshow("MSSD", show_img);
+                //cv::waitKey(10) ;
+            //}
         }
-
-
-        // cv::imshow("MSSD", out);
-        // cv::waitKey(10) ;
-        // outputVideo.write(out);
         gettimeofday(&t1_, NULL);
         float mytime = ( float )((t1_.tv_sec * 1000000 + t1_.tv_usec) - (t0_.tv_sec * 1000000 + t0_.tv_usec)) / 1000;
-        std::cout<<"["<<frame_cnt<<"] " <<"thread_done"  << " times  " << mytime << "ms\n";
-        std::cout<<"["<<frame_cnt<<"] " <<" --------------------------------------------------------------------------\n";
+        std::cout <<"thread_done"  << " times  " << mytime << "ms\n";
+        std::cout <<" --------------------------------------------------------------------------\n";
         //cv::imshow("MSSD", frame);
         //cv::waitKey(10) ;
+
     }
-    
-    for(int i=0;i<2;i++)
+    for(int i=0;i<CPU_THREAD_CNT+(GPU_THREAD_CNT+1)/2;i++)
     {
         release_graph_tensor(out_tensor[i]);
         release_graph_tensor(input_tensor[i]);
@@ -540,42 +566,4 @@ int main(int argc, char* argv[])
     release_tengine();
 
     return 0;
-}
-
-
-void *v4l2_thread(void *threadarg)
-{
-    set_cpu(3);
-	while (1)
-	{
-        if(is_show_img)
-        {
-            if(is_show_knn_box)
-            {
-                pthread_mutex_lock(&mutex_knn_bgs_frame);
-                v4l2_.read_frame(frame);
-                pthread_mutex_unlock(&mutex_knn_bgs_frame);
-                pthread_mutex_lock(&mutex_show_img);
-                v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,0,0);
-                pthread_mutex_unlock(&mutex_show_img);
-                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
-            }
-            else
-            {
-                pthread_mutex_lock(&mutex_knn_bgs_frame);
-                v4l2_.read_frame_argb(pfb,frame,screen_.vinfo.xres_virtual,0,0);
-                pthread_mutex_unlock(&mutex_knn_bgs_frame);
-                pthread_mutex_lock(&mutex_box);
-                screen_.refresh_draw_box(pfb,0,0);
-                pthread_mutex_unlock(&mutex_box);
-                memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
-            }
-        }
-        else
-            v4l2_.read_frame(frame);
-        sleep(0.01); 
-        if (quit)
-            break;
-        
-    }
 }

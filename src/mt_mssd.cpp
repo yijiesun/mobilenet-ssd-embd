@@ -202,10 +202,10 @@ void mssd_core(graph_t &graph, int thread_num, float* input_data,tensor_t &input
     }
     else
     {
-        x0 = knn_bgs.boundRect[thread_num-1].x;
-        y0 = knn_bgs.boundRect[thread_num-1].y;
-        w0 = knn_bgs.boundRect[thread_num-1].width;
-        h0 = knn_bgs.boundRect[thread_num-1].height;
+        x0 = knn_bgs.boundRect[thread_num-1].rec.x;
+        y0 = knn_bgs.boundRect[thread_num-1].rec.y;
+        w0 = knn_bgs.boundRect[thread_num-1].rec.width;
+        h0 = knn_bgs.boundRect[thread_num-1].rec.height;
         x0_ = x0 - 2 * knn_bgs.padSize;
         y0_ = y0 - 2 * knn_bgs.padSize;
         w0_ = w0 + 4 * knn_bgs.padSize;

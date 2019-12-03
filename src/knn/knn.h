@@ -13,7 +13,11 @@ struct PixelHistory
 	unsigned char *gray;
 	unsigned char *IsBG;
 };
-
+struct REC_BOX
+{
+	Rect rec;
+	bool have_box;
+};
 class KNN_BGS  
 {  
 public:  
@@ -36,7 +40,8 @@ public:
 	double tooSmalltoDrop;
 	string saveAdress;
 	vector<Box> knn_use_box;
-	vector<Rect> boundRect;
+	vector<int> pos_x_in_rec_box;
+	vector<REC_BOX> boundRect;
 	void init();
 	void knn_core();
 	void saveROI();
@@ -45,6 +50,7 @@ public:
 	Mat senser_roi_down100,senser_roi_down100_not;
 	Mat bk_cnt,bk_cnt_cnt; //used to record bg cnt
 	Mat bk;
+	Mat puzzle_mat;
 	Mat hot_map,hot_map_noraml,hot_map_thresh;
 	Mat bit_and_hotmap_with_diff;
 	Mat human_roi;//记录友好大小的行人出没热点区域
@@ -52,19 +58,22 @@ public:
 	void postTreatment(Mat &mat);
 	void processRects(vector<Box> &box);
 	void addBoxToRecs();
-	void getTopRects(vector<Rect> &rects0, vector<Rect> &rects);
+	void getTopRects(vector<Rect> &rects0, vector<REC_BOX> &rects);
 	//bool sortFun(const cv::Rect &p1, const cv::Rect &p2);
 	int buildRecsFromContors(vector<vector<Point>> &contours, vector<Rect> &rects);
 	void clearSmallRecs();
-	void mergeRecs(vector<Rect> &rects, float percent);
+	void mergeRecs(vector<REC_BOX> &rects, float percent);
 	void drawRecs(Mat & img, vector<Rect> &rects, const Scalar& color);
 	float DecideOverlap(const Rect &r1, const Rect &r2, Rect &r3);
 	void set(int *conf);
-	void paddingRecs(vector<Rect> &rects, int size);
+	void paddingRecs(vector<REC_BOX> &rects, int size);
 	void insideDilate(Mat & bimg, Mat & bout, int win_size, int scale);
 	void diff2(Mat &cur,Mat &las);
 	void add_diff_in_box_to_mask(vector<Box> &box);
 	void update_bg();
+	void knn_puzzle(Mat &frame);
+	int find_son_block(vector<Rect> &rects,int begin,int max_wid,int max_hgt);
+	void clearStrangeRecs();
 private:  
 	PixelHistory* framePixelHistory;
 	

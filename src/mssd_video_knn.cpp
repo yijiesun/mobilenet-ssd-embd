@@ -32,137 +32,71 @@
 #include "tengine_c_api.h"
 #include <sys/time.h>
 #include <stdio.h>
+#include "cpu_device.h"
 #include "common.hpp"
-#include "knn/knn.h"
 #include "config.h"
+#include "knn/knn.h"
+#include "v4l2/v4l2.h"  
+#include "screen/screen.h"
 
 #define DEF_PROTO "models/MobileNetSSD_deploy.prototxt"
 #define DEF_MODEL "models/MobileNetSSD_deploy.caffemodel"
-#define DEF_IMAGE "tests/images/ssd_dog.jpg"
-#define DEF_VIDEO_IN "tests/test0.avi"
-#define DEF_VIDEO_OUT "tests/result_test0.avi"
+#define CLIP(a,b,c) (  (a) = (a)>(c)?(c):((a)<(b)?(b):(a))  )
+#define CPU_THREAD_CNT 3 //a53-012         a72-4          a72-5
+#define GPU_THREAD_CNT 2 
 using namespace cv;
 using namespace std;
 
-
-const char* class_names[] = {"background",
-                        "aeroplane", "bicycle", "bird", "boat",
-                        "bottle", "bus", "car", "cat", "chair",
-                        "cow", "diningtable", "dog", "horse",
-                        "motorbike", "person", "pottedplant",
-                        "sheep", "sofa", "train", "tvmonitor"};
-
-vector<Box>	boxes; 
+int frame_cnt;
+int cpu_num_[2] ={0,1};
+int knn_conf[5] = { 2, 1, 5, 5, 10};
+V4L2 v4l2_;
+KNN_BGS knn_bgs;
+Mat process_frame;
+Mat background;
+cv::Mat final_img;
+Mat show_img;
+unsigned int * pfb;
+SCREEN screen_;
+pthread_mutex_t  mutex_knn_bgs_frame;
+pthread_mutex_t  mutex_show_img;
+pthread_mutex_t  mutex_box;
+vector<Box>	boxes[2]; 
 vector<Box>	boxes_all; 
+cv::Mat frame;
+int IMG_WID;
+int IMG_HGT;
+int img_h;
+int img_w;
+int img_size;
+bool quit;
+bool is_show_img;
+bool is_show_knn_box;
+tensor_t input_tensor[2];
+float* input_data[2];
+tensor_t out_tensor[2];
+graph_t graph[2]; 
 
-// void get_input_data_ssd(std::string& image_file, float* input_data, int img_h,  int img_w)
-void get_input_data_ssd(cv::Mat img, float* input_data, int img_h,  int img_w)
-{
-    // cv::Mat img = cv::imread(image_file);
+const char* class_names[] = {"background", "aeroplane", "bicycle",   "bird",   "boat",        "bottle",
+                                "bus",        "car",       "cat",       "chair",  "cow",         "diningtable",
+                                "dog",        "horse",     "motorbike", "person", "pottedplant", "sheep",
+                                "sofa",       "train",     "tvmonitor"};
 
-    if (img.empty())
-    {
-        // std::cerr << "Failed to read image file " << image_file << ".\n";
-        std::cerr << "Failed to read image from camera.\n";
-        return;
-    }
+void *v4l2_thread(void *threadarg);
+inline int set_cpu(int i)  
+{  
+    cpu_set_t mask;  
+    CPU_ZERO(&mask);  
+  
+    CPU_SET(i,&mask);  
 
-    cv::resize(img, img, cv::Size(img_h, img_w));
-    img.convertTo(img, CV_32FC3);
-    float *img_data = (float *)img.data;
-    int hw = img_h * img_w;
-
-    float mean[3]={127.5,127.5,127.5};
-    for (int h = 0; h < img_h; h++)
-    {
-        for (int w = 0; w < img_w; w++)
-        {
-            for (int c = 0; c < 3; c++)
-            {
-                input_data[c * hw + h * img_w + w] = 0.007843* (*img_data - mean[c]);
-                img_data++;
-            }
-        }
-    }
-}
-
-// void post_process_ssd(std::string& image_file,float threshold,float* outdata,int num,std::string& save_name)
-void post_process_ssd(cv::Mat img, float threshold,float* outdata,int num)
-{
-
-    // cv::Mat img = cv::imread(image_file);
-    int raw_h = img.size().height;
-    int raw_w = img.size().width;
-    boxes.clear();
-    int line_width=raw_w*0.002;
-    printf("detect ruesult num: %d \n",num);
-    for (int i=0;i<num;i++)
-    {
-        if(outdata[1]>=threshold)
-        {
-            Box box;
-            box.class_idx=outdata[0];
-            box.score=outdata[1];
-            box.x0=outdata[2]*raw_w;
-            box.y0=outdata[3]*raw_h;
-            box.x1=outdata[4]*raw_w;
-            box.y1=outdata[5]*raw_h;
-            boxes.push_back(box);
-            printf("%s\t:%.0f%%\n", class_names[box.class_idx], box.score * 100);
-            printf("BOX:( %g , %g ),( %g , %g )\n",box.x0,box.y0,box.x1,box.y1);
-        }
-        outdata+=6;
-    }
- #if 0
-    for(int i=0;i<(int)boxes.size();i++)
-    {
-        Box box=boxes[i];
-        cv::rectangle(img, cv::Rect(box.x0, box.y0,(box.x1-box.x0),(box.y1-box.y0)),cv::Scalar(255, 255, 0),line_width);
-        std::ostringstream score_str;
-        score_str<<box.score;
-        std::string label = std::string(class_names[box.class_idx]) + ": " + score_str.str();
-        int baseLine = 0;
-        cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-        cv::rectangle(img, cv::Rect(cv::Point(box.x0,box.y0- label_size.height),
-                                  cv::Size(label_size.width, label_size.height + baseLine)),
-                      cv::Scalar(255, 255, 0), -1);
-        cv::putText(img, label, cv::Point(box.x0, box.y0),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
-    }
-#endif
-    // cv::imwrite(save_name,img);
-    // std::cout<<"======================================\n";
-    // std::cout<<"[DETECTED IMAGE SAVED]:\t"<< save_name<<"\n";
-    // std::cout<<"======================================\n";
-}
-void init_video_knn(KNN_BGS &knn_bgs,int *knn_conf,VideoCapture & v_capture,VideoWriter &outputVideo,const char *inVideoName,const char *outVideoName)
-{
-		v_capture.open(inVideoName);
-		v_capture.set(6, cv::VideoWriter::fourcc ('M', 'J', 'P', 'G'));
-        knn_bgs.IMG_WID = v_capture.get(3);
-		knn_bgs.IMG_HGT = v_capture.get(4);
-        knn_bgs.set(knn_conf);
-        knn_bgs.pos = 0;
-        knn_bgs.useTopRect = knn_conf[8];
-		knn_bgs.knn_over_percent = 0.001f;
-		knn_bgs.tooSmalltoDrop = knn_conf[9];
-		knn_bgs.dilateRatio =  knn_bgs.IMG_WID  / 320 * 5;
-        knn_bgs.init(/*v_capture*/);
-
-        Size sWH = Size( knn_bgs.IMG_WID, knn_bgs.IMG_HGT);
-		bool ret = outputVideo.open(outVideoName, cv::VideoWriter::fourcc ('M', 'P', '4', '2'), 25, sWH);
-}
-void togetherAllBox(double zoom_value,int x0,int y0 )
-{
-	for (int i = 0; i<boxes.size(); i++) {
-		float		bx0 = boxes[i].x0, by0 = boxes[i].y0, bx1= boxes[i].x1, by1 = boxes[i].y1;
-			boxes[i].x0= bx0 / zoom_value + x0;
-			boxes[i].y0 = by0 / zoom_value + y0;
-			boxes[i].x1 = bx1 / zoom_value + x0;
-			boxes[i].y1 = by1/ zoom_value + y0;
-		   boxes_all.push_back(boxes[i]);
-	}
-}
+    if(-1 == pthread_setaffinity_np(pthread_self() ,sizeof(mask),&mask))  
+    {  
+        fprintf(stderr, "pthread_setaffinity_np erro\n");  
+        return -1;  
+    }  
+    return 0;  
+} 
 
 void draw_img(Mat &img)
 {
@@ -185,227 +119,424 @@ void draw_img(Mat &img)
 
 }
 
-int main(int argc, char *argv[])
+int box_in_which_rec(Box &b0)
 {
-    const std::string root_path = get_root_path();
-    std::string proto_file;
-    std::string model_file;
-    std::string image_file;
-    std::string save_name="save.jpg";
-    KNN_BGS knn_bgs;
-    float show_threshold=0.5;
-    int knn_conf[10] = { 0, 2, 1, 5, 0, 2, 4, 1, 5, 10};
+    int pos = 0;
+    float percent = 0;
+    vector<REC_BOX>::iterator it;
 
-    int res;
-    while( ( res=getopt(argc,argv,"p:m:i:h"))!= -1)
+    Rect tmp;
+    for(int i=0;i<knn_bgs.boundRect.size();i++)
     {
-        switch(res)
+        Rect rbox(b0.x0-knn_bgs.pos_x_in_rec_box[i]+knn_bgs.boundRect[i].rec.x,b0.y0+knn_bgs.boundRect[i].rec.y,b0.x1-b0.x0,b0.y1-b0.y0);
+        // cout<<"["<<frame_cnt<<"] "<<"boundRect["<<i<<"]:"<<knn_bgs.boundRect[i].rec.x<<","<<knn_bgs.boundRect[i].rec.y<<","<<knn_bgs.boundRect[i].rec.height<<","<<knn_bgs.boundRect[i].rec.width<<endl;
+        float p=knn_bgs.DecideOverlap(rbox,knn_bgs.boundRect[i].rec,tmp);
+        if(p>percent)
         {
-            case 'p':
-                proto_file=optarg;
-                break;
-            case 'm':
-                model_file=optarg;
-                break;
-            case 'i':
-                image_file=optarg;
-                break;
-            case 'h':
-                std::cout << "[Usage]: " << argv[0] << " [-h]\n"
-                          << "   [-p proto_file] [-m model_file] [-i image_file]\n";
-                return 0;
-            default:
-                break;
+            pos = i;
+            // cout<<"["<<frame_cnt<<"] "<<"p>percent "<<p<<","<<percent<<"  pos:"<<pos<<endl;
+            percent = p;
+        }
+        if(percent>0.5)
+        {
+            b0.x0 -= knn_bgs.pos_x_in_rec_box[pos];
+            return pos;
+        }
+        else  
+            return -1;
+    }
+}
+void togetherAllBox(int th_num,vector<Box> &b0,vector<Box> &b_all )
+{
+    if(th_num==0)
+    {
+        for (int i = 0; i<b0.size(); i++) {
+            float bx0 = b0[i].x0, by0 = b0[i].y0, bx1= b0[i].x1, by1 = b0[i].y1;
+
+            int pos = box_in_which_rec(b0[i]);
+            // cout<<"["<<frame_cnt<<"] "<<"["<<th_num<<"] x0y0x1y1,pos:"<<bx0<<","<<by0<<","<<bx1<<","<<by1<<"          "<<pos<<endl;
+            
+            if(pos>=0)
+            {
+                knn_bgs.boundRect[pos].have_box = 1;
+                // cout<<"["<<frame_cnt<<"] "<<"["<<pos<<"] wyhw:"<<knn_bgs.boundRect[pos].rec.x<<","<<knn_bgs.boundRect[pos].rec.y<<","<<knn_bgs.boundRect[pos].rec.height<<","<<knn_bgs.boundRect[pos].rec.width<<endl;
+                b0[i].x0= bx0 + knn_bgs.boundRect[pos].rec.x;
+                b0[i].y0 = by0 + knn_bgs.boundRect[pos].rec.y;
+                b0[i].x1 = bx1 + knn_bgs.boundRect[pos].rec.x;
+                b0[i].y1 = by1 + knn_bgs.boundRect[pos].rec.y;
+                CLIP(b0[i].x0,0,IMG_WID-1);
+                CLIP(b0[i].y0,0,IMG_HGT-1);
+                CLIP(b0[i].x1,0,IMG_WID-1);
+                CLIP(b0[i].y1,0,IMG_HGT-1);
+                b_all.push_back(b0[i]);
+            }
+	    }
+        for(int i=0;i<knn_bgs.boundRect.size();i++)
+        {
+
+            if(knn_bgs.boundRect[i].have_box)
+            {
+                Mat	tmp_hotmap = knn_bgs.hot_map(knn_bgs.boundRect[i].rec);
+                tmp_hotmap.convertTo(tmp_hotmap, tmp_hotmap.type(), 1, 10);
+            }
+            else
+            {
+                Mat	tmp_hotmap = knn_bgs.hot_map(knn_bgs.boundRect[i].rec);
+                tmp_hotmap.convertTo(tmp_hotmap, tmp_hotmap.type(), 1, -10);
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i<b0.size(); i++) {
+            b_all.push_back(b0[i]);
         }
     }
 
+}
+void get_input_data_ssd(Mat& img, float* input_data, int img_h, int img_w)
+{
+    cv::resize(img, img, cv::Size(img_h, img_w));
+    img.convertTo(img, CV_32FC3);
+    float* img_data = ( float* )img.data;
+    int hw = img_h * img_w;
 
-
-    const char *model_name = "mssd_300";
-    if(proto_file.empty())
+    float mean[3] = {127.5, 127.5, 127.5};
+    for(int h = 0; h < img_h; h++)
     {
-        proto_file = root_path + DEF_PROTO;
-        std::cout<< "proto file not specified,using "<<proto_file<< " by default\n";
-
+        for(int w = 0; w < img_w; w++)
+        {
+            for(int c = 0; c < 3; c++)
+            {
+                input_data[c * hw + h * img_w + w] = 0.007843 * (*img_data - mean[c]);
+                img_data++;
+            }
+        }
     }
-    if(model_file.empty())
+}
+
+void post_process_ssd(vector<Box> & box_,int thread_num,int raw_h,int raw_w,float threshold, float* outdata, int num)
+{
+    box_.clear();
+    printf("[%d] detect ruesult num: %d \n",thread_num,num);
+    for (int i=0;i<num;i++)
     {
-        model_file = root_path + DEF_MODEL;
-        std::cout<< "model file not specified,using "<<model_file<< " by default\n";
+        if(outdata[0]==15)
+        {
+            if(outdata[1]>=threshold)
+            {
+                Box box;
+                box.class_idx=outdata[0];
+                box.score=outdata[1];
+                box.x0=outdata[2]*raw_w;
+                box.y0=outdata[3]*raw_h;
+                box.x1=outdata[4]*raw_w;
+                box.y1=outdata[5]*raw_h;
+                CLIP(box.x0,0,IMG_WID-1);
+                CLIP(box.y0,0,IMG_HGT-1);
+                CLIP(box.x1,0,IMG_WID-1);
+                CLIP(box.y1,0,IMG_HGT-1);
+                box_.push_back(box);
+                printf("[%d]  %s\t:%.0f%%\n",thread_num, class_names[box.class_idx], box.score * 100);
+                printf("[%d]  BOX:( %g , %g ),( %g , %g )\n",thread_num,box.x0,box.y0,box.x1,box.y1);
+            }
+            outdata+=6;
+        }
     }
-    if(image_file.empty())
+}
+
+void mssd_core(graph_t &graph, int thread_num, float* input_data,tensor_t &input_tensor, tensor_t &out_tensor )
+{
+    // cout<<"["<<frame_cnt<<"] "<<"thread_num "<<thread_num<<endl;
+    struct timeval t0, t1;
+    float total_time = 0.f;
+    gettimeofday(&t0, NULL);
+
+    Mat	img_roi;
+    if(thread_num == 0)
     {
-        image_file = root_path + DEF_IMAGE;
-        std::cout<< "image file not specified,using "<<image_file<< " by default\n";
+        // return;
+        for(int i=0;i<knn_bgs.boundRect.size();i++)
+        {
+            pthread_mutex_lock(&mutex_show_img);
+            Mat	img_show = show_img(knn_bgs.boundRect[i].rec);
+            img_show.convertTo(img_show, img_show.type(), 1, 30);
+            pthread_mutex_unlock(&mutex_show_img);
+        }
+        pthread_mutex_lock(&mutex_knn_bgs_frame);
+        img_roi = knn_bgs.puzzle_mat.clone();
+        pthread_mutex_unlock(&mutex_knn_bgs_frame);
     }
-
-    // init tengine
-    init_tengine_library();
-    if (request_tengine_version("0.1") < 0)
-        return 1;
-    if (load_model(model_name, "caffe", proto_file.c_str(), model_file.c_str()) < 0)
-        return 1;
-    std::cout << "load model done!\n";
-
-    // create graph
-    graph_t graph = create_runtime_graph("graph", model_name, NULL);
-    if (!check_graph_valid(graph))
+    else
     {
-        std::cout << "create graph0 failed\n";
-        return 1;
+        pthread_mutex_lock(&mutex_knn_bgs_frame);
+        img_roi = knn_bgs.frame.clone();
+        pthread_mutex_unlock(&mutex_knn_bgs_frame);
     }
 
-    // input
-    int img_h = 300;
-    int img_w = 300;
-    int x0,y0,w0,h0;
-    int img_size = img_h * img_w * 3;
-    float *input_data = (float *)malloc(sizeof(float) * img_size);
-    cv::VideoCapture capture;
-    VideoWriter outputVideo;
-    std::string in_video_file =  root_path + DEF_VIDEO_IN;
-    std::string out_video_file =  root_path + DEF_VIDEO_OUT;
+    int raw_h = img_roi.size().height;
+    int raw_w = img_roi.size().width;
+    get_input_data_ssd(img_roi, input_data, img_h, img_w);
+    set_tensor_buffer(input_tensor, input_data, img_size * 4);
+    run_graph(graph, 1);
+    
+    out_tensor = get_graph_output_tensor(graph, 0, 0); 
+    int out_dim[4];
+    get_tensor_shape(out_tensor, out_dim, 4);
+    float* outdata = ( float* )get_tensor_buffer(out_tensor);
+    int num = out_dim[1];
+    float show_threshold = 0.5;
+
+    post_process_ssd(boxes[thread_num],thread_num,raw_h,raw_w,show_threshold, outdata, num);
+    
+    pthread_mutex_lock(&mutex_box);
+    togetherAllBox(thread_num, boxes[thread_num], boxes_all);
+    pthread_mutex_unlock(&mutex_box);
+    gettimeofday(&t1, NULL);
+    float mytime = ( float )((t1.tv_sec * 1000000 + t1.tv_usec) - (t0.tv_sec * 1000000 + t0.tv_usec)) / 1000;
+
+    std::cout<<"["<<frame_cnt<<"] " <<"thread " << thread_num << " times  " << mytime << "ms\n";
+}
+
+void *cpu_pthread(void *threadarg)
+{
+    mssd_core(graph[1], 1,input_data[1],input_tensor[1],out_tensor[1]);
+}
+void *gpu_pthread(void *threadarg)
+{
+    mssd_core(graph[0], 0,input_data[0],input_tensor[0],out_tensor[0]);
+}
+
+int main(int argc, char* argv[])
+{
+    frame_cnt = 0;
+    quit = false;
+    bool first =true;
+    int first_cnt =0;
+    std::string in_video_file;
+    std::string out_video_file;
     get_param_mssd_video_knn(in_video_file,out_video_file);
     std::cout<<"input video: "<<in_video_file<<"\noutput video: "<<out_video_file<<std::endl;
-    init_video_knn(knn_bgs,knn_conf,capture, outputVideo,in_video_file.c_str(),out_video_file.c_str());
-    cv::Mat frame;
-    cv::Mat show_img;
-    int node_idx=0;
-    int tensor_idx=0;
-    tensor_t input_tensor = get_graph_input_tensor(graph, node_idx, tensor_idx);
-    if(!check_tensor_valid(input_tensor))
+    std::string dev_num;
+    get_param_mms_V4L2(dev_num);
+    std::cout<<"open "<<dev_num<<std::endl;
+    int knn_box_exist_cnt;
+    get_knn_box_exist_cnt(knn_box_exist_cnt);
+    std::cout<<"knn_box_exist_cnt: "<<knn_box_exist_cnt<<std::endl;
+    double knn_thresh;
+    get_knn_thresh(knn_thresh);
+    std::cout<<"knn_thresh: "<<knn_thresh<<std::endl;
+    get_show_img(is_show_img);
+    std::cout<<"is_show_img "<<is_show_img<<std::endl;
+    get_show_knn_box(is_show_knn_box);
+    std::cout<<"is_show_knn_box "<<is_show_knn_box<<std::endl;
+
+    cv::VideoCapture capture;
+    VideoWriter outputVideo;
+    capture.open(in_video_file.c_str());
+    capture.set(CV_CAP_PROP_FOURCC, cv::VideoWriter::fourcc ('M', 'J', 'P', 'G'));
+    IMG_WID = capture.get(CV_CAP_PROP_FRAME_WIDTH);
+    IMG_HGT = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
+    Size sWH = Size( 2*IMG_WID,2*IMG_HGT);
+    outputVideo.open(out_video_file.c_str(), cv::VideoWriter::fourcc ('M', 'P', '4', '2'), 25, sWH);
+    frame.create(IMG_HGT,IMG_WID,CV_8UC3);
+    process_frame.create(IMG_HGT,IMG_WID,CV_8UC3);
+    show_img.create(IMG_HGT,IMG_WID,CV_8UC3);
+    show_img = Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+    background=Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+    frame = Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+    final_img.create(IMG_HGT,IMG_WID,CV_8UC3);
+    final_img = Mat::zeros(IMG_HGT,IMG_WID,CV_8UC3);
+    const std::string root_path = get_root_path();
+    std::string proto_file;
+    std::string model_file;
+    const char* pproto_file;
+    const char* pmodel_file;
+    proto_file = root_path + DEF_PROTO;
+    model_file = root_path + DEF_MODEL;
+    screen_.init((char *)"/dev/fb0",640,480);
+    pfb = (unsigned int *)malloc(screen_.finfo.smem_len);
+
+    knn_bgs.IMG_WID = IMG_WID;
+    knn_bgs.IMG_HGT = IMG_HGT;
+    knn_bgs.set(knn_conf);
+    knn_bgs.pos = 0;
+    knn_bgs.knn_thresh = knn_thresh;
+    knn_bgs.knn_box_exist_cnt = knn_box_exist_cnt;
+    knn_bgs.useTopRect = knn_conf[3];
+    knn_bgs.knn_over_percent = 0.001f;
+    knn_bgs.tooSmalltoDrop = knn_conf[4];
+    knn_bgs.dilateRatio =  knn_bgs.IMG_WID  / 320 * 5;
+    knn_bgs.init();
+    boxes_all.clear();
+    /* do not let GPU run concat */
+    setenv("GPU_CONCAT", "0", 1);
+    /* using GPU fp16 */
+    setenv("ACL_FP16", "1", 1);
+    /* default CPU device using 0,1,2,3 */
+    setenv("TENGINE_CPU_LIST", "2", 1);
+    /* using fp32 or int8 */
+    setenv("KERNEL_MODE", "2", 1);
+
+    // init tengine
+    init_tengine();
+    if(request_tengine_version("0.9") < 0)
+        return -1;
+
+    img_h = 300;
+    img_w = 300;
+    img_size = img_h * img_w * 3;
+    pproto_file = proto_file.c_str();
+    pmodel_file = model_file.c_str();
+    int node_idx = 0;
+    int tensor_idx = 0;
+    int dims[] = {1, 3, img_h, img_w};
+    // thread 0 for cpu 2A72
+    const struct cpu_info* p_info = get_predefined_cpu("rk3399");
+    int a72_list[] = {4,5};
+    set_online_cpu(( struct cpu_info* )p_info, a72_list, sizeof(a72_list) / sizeof(int));
+    create_cpu_device("a72", p_info);
+
+  for(int i=0;i<2;i++)
     {
-        printf("Get input node failed : node_idx: %d, tensor_idx: %d\n",node_idx,tensor_idx);
-        return 1;
+        graph[i] = create_graph(NULL, "caffe", pproto_file, pmodel_file);
+        input_data[i] = ( float* )malloc(sizeof(float) * img_size);
+        input_tensor[i] = get_graph_input_tensor(graph[i], node_idx, tensor_idx);
+        if(input_tensor[i] == nullptr)
+            printf("Get input node failed : node_idx: %d, tensor_idx: %d\n", node_idx, tensor_idx);   
+        set_tensor_shape(input_tensor[i], dims, 4);
     }
 
-    int dims[] = {1, 3, img_h, img_w};
-    set_tensor_shape(input_tensor, dims, 4);
-    prerun_graph(graph);
+    set_graph_device(graph[0], "acl_opencl");
 
-    int repeat_count = 1;
-    const char *repeat = std::getenv("REPEAT_COUNT");
+    if(set_graph_device(graph[1], "a72") < 0)
+        std::cerr << "set device a72 failed\n";
 
-    if (repeat)
-        repeat_count = std::strtoul(repeat, NULL, 10);
+	pthread_t threads_v4l2;
+	int rc = pthread_create(&threads_v4l2, NULL, v4l2_thread, NULL);
+    pthread_detach(threads_v4l2);
 
-    float *outdata;
-    int out_dim[4];
+    for(int i=0;i<2;i++)
+    {
+        int ret_prerun = prerun_graph(graph[i]);
+        if(ret_prerun < 0)
+            std::printf("prerun failed\n"); 
+    }
+
     while(1){
-        struct timeval t0, t1;
-        float total_time = 0.f;
-		if (!capture.read(frame))
+
+        if (!capture.read(frame))
 		{
 			cout<<"cannot open video or end of video"<<endl;
             break;
 		}
-        knn_bgs.frame = frame;
-        knn_bgs.frame = frame.clone();
-        show_img  = frame.clone();
-        knn_bgs.pos ++;
-        knn_bgs.boundRect.clear();
-        knn_bgs.knn_core();
-        boxes_all.clear();
-
-        for (int i = 0; i< knn_bgs.boundRect.size(); i++)
-		{
-                double zoom_value;
-            	x0 = knn_bgs.boundRect[i].x;
-				y0 = knn_bgs.boundRect[i].y;
-				w0 = knn_bgs.boundRect[i].width; 
-				h0 = knn_bgs.boundRect[i].height; 
-                if (w0 <= knn_bgs.tooSmalltoDrop + 2 * knn_bgs.padSize || h0 <= knn_bgs.tooSmalltoDrop + 2 * knn_bgs.padSize)
-                    continue;
-                Mat	img_roi = knn_bgs.frame(cv::Rect(x0, y0, w0, h0));
-                Mat	img_show= show_img(cv::Rect(x0, y0, w0, h0));
-                Mat img_roi_big;
-                img_show.convertTo(img_show, img_show.type(), 1, 50);
-
-                if (img_roi.cols <= 100)
-				{
-					zoom_value = 200.0 / (double)(img_roi.cols);
-					int wid = cvRound(zoom_value * img_roi.cols);
-					int hgt = cvRound(zoom_value * img_roi.rows);
-					resize(img_roi, img_roi_big, Size(wid, hgt));
-				}
-				else if (img_roi.cols <= 200)
-				{
-					img_roi_big = img_roi;
-                    zoom_value = 1;
-				}
-				else
-				{
-					zoom_value = 200.0 / (double)(img_roi.cols);
-					int wid = cvRound(zoom_value * img_roi.cols);
-					int hgt = cvRound(zoom_value * img_roi.rows);
-					resize(img_roi, img_roi_big, Size(wid, hgt));
-				}
-
-                for (int i = 0; i < repeat_count; i++)
-                {
-                    get_input_data_ssd(img_roi_big, input_data, img_h,  img_w);
-
-                    gettimeofday(&t0, NULL);
-                    set_tensor_buffer(input_tensor, input_data, img_size * 4);
-                    run_graph(graph, 1);
-
-                    gettimeofday(&t1, NULL);
-                    float mytime = (float)((t1.tv_sec * 1000000 + t1.tv_usec) - (t0.tv_sec * 1000000 + t0.tv_usec)) / 1000;
-                    total_time += mytime;
-
-                }
-
-                tensor_t out_tensor = get_graph_output_tensor(graph, 0,0);//"detection_out");
-                get_tensor_shape( out_tensor, out_dim, 4);
-                outdata = (float *)get_tensor_buffer(out_tensor);
-
-                int num=out_dim[1];
-                
-                post_process_ssd(img_roi_big, show_threshold, outdata, num);
-                togetherAllBox(zoom_value,x0,y0);
-         }
-        
-
-        for (int i = 0; i < repeat_count; i++)
+        frame_cnt++;
+        if(first)
         {
-            get_input_data_ssd(frame, input_data, img_h,  img_w);
-
-            gettimeofday(&t0, NULL);
-            set_tensor_buffer(input_tensor, input_data, img_size * 4);
-            run_graph(graph, 1);
-
-            gettimeofday(&t1, NULL);
-            float mytime = (float)((t1.tv_sec * 1000000 + t1.tv_usec) - (t0.tv_sec * 1000000 + t0.tv_usec)) / 1000;
-            total_time += mytime;
-
+            first_cnt++;
+            if(first_cnt >= 10)
+            {
+                background = frame.clone();
+                knn_bgs.bk = frame.clone();
+                first = false;
+            }
+            else
+                continue;      
         }
 
-        tensor_t out_tensor = get_graph_output_tensor(graph, 0,0);//"detection_out");
-        get_tensor_shape( out_tensor, out_dim, 4);
-        outdata = (float *)get_tensor_buffer(out_tensor);
+        process_frame = frame.clone();
+        pthread_mutex_lock(&mutex_show_img);
+        show_img = frame.clone();
+        pthread_mutex_unlock(&mutex_show_img);
+        pthread_mutex_lock(&mutex_knn_bgs_frame);
+        knn_bgs.frame = process_frame.clone();
+        pthread_mutex_unlock(&mutex_knn_bgs_frame);
+        knn_bgs.pos ++;
+        knn_bgs.boundRect.clear();
+        knn_bgs.diff2(process_frame, knn_bgs.bk);
+        knn_bgs.knn_core();
+        pthread_mutex_lock(&mutex_box);
+        knn_bgs.processRects(boxes_all);
+        pthread_mutex_unlock(&mutex_box);
+        boxes_all.clear();
+        knn_bgs.knn_puzzle(process_frame);
+        for(int i=0;i<2;i++)
+            boxes[i].clear();
+      
+        struct timeval t0_, t1_;
+        float total_time = 0.f;
+        gettimeofday(&t0_, NULL);
+        pthread_t threads_c;      
+        pthread_t threads_gpu;
+        pthread_create(&threads_gpu, NULL, gpu_pthread, NULL);
+        pthread_create(&threads_c, NULL, cpu_pthread,NULL);
 
-        int num=out_dim[1];
-        
-        post_process_ssd(frame, show_threshold, outdata, num);
-        togetherAllBox(1,0,0);
+        pthread_join(threads_c,NULL);
+        pthread_join(threads_gpu,NULL);
+
+    //    pthread_mutex_lock(&mutex_show_img);
         draw_img(show_img);
+        Mat out,hot_map_color,hot_map_color2,hot_map_thresh_color,hot_map;
+        hot_map = knn_bgs.hot_map;
 
-        std::cout << "--------------------------------------\n";
-        std::cout << "repeat " << repeat_count << " times, avg time per run is " << total_time / repeat_count << " ms\n";
-        outputVideo.write(show_img);
+        cv::cvtColor(knn_bgs.FGMask, hot_map_color2, CV_GRAY2BGR);  
+        cv::cvtColor(knn_bgs.hot_map, hot_map_thresh_color, CV_GRAY2BGR);  
+        //hconcat(show_img,knn_bgs.bk,out);
+        resize(knn_bgs.puzzle_mat, knn_bgs.puzzle_mat, show_img.size(), 0, 0,  cv::INTER_LINEAR); 
+        hconcat(show_img,knn_bgs.puzzle_mat,out);
+        hconcat(hot_map_color2,hot_map_thresh_color,hot_map_color2);
+        vconcat(out,hot_map_color2,out);
+    
+        string no=to_string(frame_cnt);
+        Point siteNo;
+        siteNo.x = 25;
+        siteNo.y = 25;
+        putText( out, no, siteNo, 2,1,Scalar( 255, 0, 0 ), 4);
+        resize(out, show_img, show_img.size(), 0, 0,  cv::INTER_LINEAR); 
+        pthread_mutex_lock(&mutex_show_img);
+        final_img = show_img.clone();
+        pthread_mutex_unlock(&mutex_show_img);
 
-        cv::imshow("MSSD", show_img);
-        if( cv::waitKey(10) == 'q' )
-            break;
+
+        // cv::imshow("MSSD", out);
+        // cv::waitKey(10) ;
+        // outputVideo.write(out);
+        gettimeofday(&t1_, NULL);
+        float mytime = ( float )((t1_.tv_sec * 1000000 + t1_.tv_usec) - (t0_.tv_sec * 1000000 + t0_.tv_usec)) / 1000;
+        std::cout<<"["<<frame_cnt<<"] " <<"thread_done"  << " times  " << mytime << "ms\n";
+        std::cout<<"["<<frame_cnt<<"] " <<" --------------------------------------------------------------------------\n";
+        //cv::imshow("MSSD", frame);
+        //cv::waitKey(10) ;
     }
+    
+    for(int i=0;i<2;i++)
+    {
+        release_graph_tensor(out_tensor[i]);
+        release_graph_tensor(input_tensor[i]);
+        postrun_graph(graph[i]);
+        destroy_graph(graph[i]);
+        free(input_data[i]);
+    }
+    release_tengine();
 
-    postrun_graph(graph);
-    free(input_data);
-    destroy_runtime_graph(graph);
-    remove_model(model_name);
-    outputVideo.release();
-    capture.release();
     return 0;
 }
 
 
+void *v4l2_thread(void *threadarg)
+{
+    set_cpu(3);
+	while (1)
+	{
+
+        pthread_mutex_lock(&mutex_show_img);
+        v4l2_. mat_to_argb(final_img.data,pfb,640,480,screen_.vinfo.xres_virtual,0,0);
+        pthread_mutex_unlock(&mutex_show_img);
+        memcpy(screen_.pfb,pfb,screen_.finfo.smem_len);
+
+        sleep(0.01); 
+        // if (quit)
+        //     break;
+        
+    }
+}
